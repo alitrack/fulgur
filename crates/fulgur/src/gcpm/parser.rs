@@ -728,18 +728,13 @@ impl<'i, 'a> DeclarationParser<'i> for StyleRuleParser<'a> {
                         | ContentItem::TargetText { .. }
                 )
             });
-            let is_plain_text = !items.is_empty()
-                && items
-                    .iter()
-                    .all(|item| matches!(item, ContentItem::String(_)));
             // Last-declaration-wins: always update content_items (clear when
-            // the new content cannot be represented by CounterPass).
-            if has_counter || is_plain_text {
+            // the new content has no counter()).
+            if has_counter {
                 *self.content_items = Some(items);
-                // Strip the original declaration. CounterPass injects a
-                // synthetic ::before/::after rule with the resolved value;
-                // leaving the original in place would duplicate plain text
-                // pseudos and Blitz cannot evaluate target/counter content.
+                // Strip the original `content: counter(...)` from cleaned CSS
+                // because Blitz cannot evaluate counter() — CounterPass injects
+                // a synthetic ::before/::after rule with the resolved value.
                 let start = decl_start.position().byte_index();
                 let end = input.position().byte_index();
                 self.edits.push(CssEdit::Replace {
@@ -748,8 +743,8 @@ impl<'i, 'a> DeclarationParser<'i> for StyleRuleParser<'a> {
                     replacement: String::new(),
                 });
             } else {
-                // Unsupported forms (e.g. content: url(...)) stay in cleaned
-                // CSS so Blitz can render what it supports directly.
+                // Plain `content: "..."` stays in cleaned CSS so Blitz can
+                // render it directly.
                 *self.content_items = None;
             }
         } else {
@@ -1947,22 +1942,17 @@ mod tests {
 
     #[test]
     fn test_parse_pseudo_content_without_counter_kept_in_cleaned_css() {
-        // Plain string content is routed through CounterPass so pass 1 can
-        // record it for `target-text(..., before|after)`. The original
-        // declaration is stripped to avoid duplicate pseudo rendering.
+        // Plain string content (no counter()) must remain in cleaned CSS so
+        // Blitz can render it directly. Stripping it would break authors who
+        // use ::before/::after for purely decorative literals.
         let css = r#".note::before { content: "Note: "; font-weight: bold; }"#;
         let ctx = parse_gcpm(css);
         assert!(
-            !ctx.cleaned_css.contains(r#"content: "Note: ""#),
-            "literal content must be injected by CounterPass only: {:?}",
+            ctx.cleaned_css.contains(r#"content: "Note: ""#),
+            "literal content must survive in cleaned_css: {:?}",
             ctx.cleaned_css
         );
         assert!(ctx.cleaned_css.contains("font-weight: bold"));
-        assert_eq!(ctx.content_counter_mappings.len(), 1);
-        assert_eq!(
-            ctx.content_counter_mappings[0].content,
-            vec![ContentItem::String("Note: ".into())]
-        );
     }
 
     #[test]
@@ -2609,6 +2599,25 @@ mod tests {
                 .flat_map(|m| m.content.iter())
                 .any(|i| matches!(i, ContentItem::TargetText { .. }));
             assert!(any_target, "2nd arg `{form}` should parse as target-text");
+        }
+    }
+
+    #[test]
+    fn parse_target_text_with_unknown_or_trailing_2nd_arg_drops_item() {
+        for css in [
+            r#"a::after { content: target-text(attr(href), unknown); }"#,
+            r#"a::after { content: target-text(attr(href), before, extra); }"#,
+        ] {
+            let g = parse_gcpm(css);
+            let any_target = g
+                .content_counter_mappings
+                .iter()
+                .flat_map(|m| m.content.iter())
+                .any(|i| matches!(i, ContentItem::TargetText { .. }));
+            assert!(
+                !any_target,
+                "unsupported form should drop target-text: {css}"
+            );
         }
     }
 

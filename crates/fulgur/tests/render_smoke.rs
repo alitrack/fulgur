@@ -3563,7 +3563,7 @@ fn target_text_in_top_center_resolves_via_implicit_href() {
     let html = r##"
 <!doctype html>
 <html><head><style>
-  body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; }
+  body { counter-reset: chapter; font-family: 'Noto Sans', sans-serif; font-size: 12pt; }
   @page { margin: 1in; @top-center { content: "Header: " target-text(attr(href)); } }
   h2 { page-break-before: always; }
 </style></head>
@@ -3616,8 +3616,9 @@ fn target_text_second_arg_resolves_target_fragments() {
                " First: " target-text(attr(href), first-letter);
     }
   }
-  h2::before { content: "BeforeFrag"; }
-  h2::after { content: "AfterFrag"; }
+  h2 { counter-increment: chapter; }
+  h2::before { content: "BeforeFrag" counter(chapter); }
+  h2::after { content: "AfterFrag" counter(chapter); }
 </style></head>
 <body>
   <p><a href="#sec1">Jump</a></p>
@@ -3641,7 +3642,7 @@ fn target_text_second_arg_resolves_target_fragments() {
     };
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(
-        text.contains("Before: BeforeFrag After: AfterFrag First: M"),
+        text.contains("Before: BeforeFrag1 After: AfterFrag1 First: M"),
         "target-text second-argument payload missing from extracted PDF text: {text:?}"
     );
 }
