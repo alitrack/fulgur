@@ -17,7 +17,7 @@ fn keyword_to_page_size(name: &str) -> PageSize {
 /// Supported pseudo-selectors:
 /// - `:first` — matches page 1 only
 /// - `:left`  — even pages in LTR, odd pages in RTL (CSS Paged Media §5:
-///              RTL documents start on a `:left` page)
+///   RTL documents start on a `:left` page)
 /// - `:right` — odd pages in LTR, even pages in RTL
 fn selector_matches(selector: &str, page_num: usize, first_page_is_left: bool) -> bool {
     match selector {
