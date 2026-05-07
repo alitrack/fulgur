@@ -3055,14 +3055,20 @@ fn resolve_viewport_cb_location(
     let x = if let Some(l) = left {
         l
     } else if let Some(r) = right {
-        cb_w_px - el_w_px - r
+        // To mirror Taffy's internal end-side layout, collapse viewport
+        // edge before subtracting element width.
+        (cb_w_px - r).round() - el_w_px.round()
     } else {
         node.final_layout.location.x
     };
     let y = if let Some(t) = top {
         t
     } else if let Some(b) = bottom {
-        cb_h_px - el_h_px - b
+        // Same order as the in-tree flow for `bottom: 0` style anchors:
+        // first round viewport location, then subtract rounded element
+        // height. This keeps fixed/abs reference paths aligned to one
+        // px boundary when cb height / element size are sub-pixel.
+        (cb_h_px - b).round() - el_h_px.round()
     } else {
         node.final_layout.location.y
     };
@@ -3820,6 +3826,40 @@ h2 { string-set: chapter-title content(text); }
         assert!(
             (frag.y - 770.0).abs() < 1.0,
             "bottom:0 fixed should resolve to y=770 (viewport_h - height); got {}",
+            frag.y
+        );
+    }
+
+    /// fulgur-orcx: `position: fixed` uses `bottom` anchoring against
+    /// viewport-anchored CB. When both values are sub-pixel, resolving
+    /// via the exact computed formula and rounding order used by Taffy
+    /// keeps fixed root and abs-in-relative reference paths aligned.
+    /// Without this, fixed-path can land 0.5px lower and fail
+    /// WPT fixedpos-009-print by halo edge.
+    #[test]
+    fn position_fixed_bottom_zero_rounds_like_taffy_with_fractional_viewport_height() {
+        let html = r#"
+            <html><body style="margin:0">
+              <div style="position: fixed; right: 0; bottom: 0; width: 36px; height: 36px">
+              </div>
+            </body></html>
+        "#;
+        let mut doc = parse(html, 600.0);
+        crate::blitz_adapter::relayout_position_fixed(&mut doc, 600.0, 800.6);
+        let mut geom = PaginationGeometryTable::new();
+        super::append_position_fixed_fragments(&mut geom, doc.deref_mut(), 1, 600.0, 800.6);
+
+        let entries: Vec<_> = geom
+            .iter()
+            .filter(|(_, g)| g.fragments.iter().any(|f| (f.width - 36.0).abs() < 0.5))
+            .collect();
+        assert_eq!(entries.len(), 1, "expected one fixed entry");
+        let frag = entries[0].1.fragments.first().unwrap();
+        assert_eq!(frag.page_index, 0, "expected fixed fragment only on page 0");
+        // With Taffy-like rounding: round(cb_h - b) - round(h) => round(800.6)-36 = 765.
+        assert!(
+            (frag.y - 765.0).abs() < 0.25,
+            "fractional fixed bottom anchor should resolve to y≈765; got {}",
             frag.y
         );
     }
