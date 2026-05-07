@@ -9,6 +9,7 @@ use crate::gcpm::counter::{format_counter, format_counter_chain};
 use crate::gcpm::{CounterStyle, TargetTextKind};
 use crate::pagination_layout::PaginationGeometryTable;
 use std::collections::BTreeMap;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, Default)]
 pub struct AnchorMap {
@@ -122,12 +123,7 @@ pub fn resolve_target_text(href: &str, kind: TargetTextKind, map: &AnchorMap) ->
         TargetTextKind::Content => entry.text.clone(),
         TargetTextKind::Before => entry.before_text.clone(),
         TargetTextKind::After => entry.after_text.clone(),
-        TargetTextKind::FirstLetter => entry
-            .text
-            .chars()
-            .next()
-            .map(|c| c.to_string())
-            .unwrap_or_default(),
+        TargetTextKind::FirstLetter => entry.text.graphemes(true).next().unwrap_or("").to_string(),
     }
 }
 
@@ -269,6 +265,16 @@ mod tests {
         assert_eq!(
             resolve_target_text("#sec-1-2", TargetTextKind::FirstLetter, &m),
             "I"
+        );
+    }
+
+    #[test]
+    fn target_text_first_letter_is_grapheme_cluster() {
+        let mut m = make_map();
+        m.entries.get_mut("sec-1-2").expect("target fixture").text = "A\u{0301}BC".to_string();
+        assert_eq!(
+            resolve_target_text("#sec-1-2", TargetTextKind::FirstLetter, &m),
+            "A\u{0301}"
         );
     }
 
