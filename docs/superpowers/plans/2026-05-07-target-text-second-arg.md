@@ -37,7 +37,7 @@ Accept `content`, `before`, `after`, and `first-letter`; drop unknown arguments 
 
 - [ ] **Step 5: Extend target text resolution**
 
-Resolve `Content` from `AnchorEntry.text`, `Before` from `AnchorEntry.before_text`, `After` from `AnchorEntry.after_text`, and `FirstLetter` from the first Unicode scalar of normalized text.
+Resolve `Content` from `AnchorEntry.text`, `Before` from `AnchorEntry.before_text`, `After` from `AnchorEntry.after_text`, and `FirstLetter` from the first grapheme cluster of normalized text.
 
 ### Task 2: Pseudo Text Capture
 
