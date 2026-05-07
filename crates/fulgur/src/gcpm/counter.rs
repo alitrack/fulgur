@@ -7,13 +7,8 @@ use std::collections::BTreeMap;
 
 fn target_href<'a>(url: &'a TargetUrl, implicit_href: Option<&'a str>) -> Option<&'a str> {
     match url {
-        TargetUrl::Attr(name) => {
-            if name == "href" {
-                Some(implicit_href.unwrap_or(""))
-            } else {
-                None
-            }
-        }
+        TargetUrl::Attr(name) if name == "href" => implicit_href,
+        TargetUrl::Attr(_) => None,
         TargetUrl::Literal(s) => Some(s.as_str()),
     }
 }
@@ -2289,6 +2284,26 @@ mod tests {
             &BTreeMap::new(),
             None,
             Some("#sec"),
+        );
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn resolve_target_counter_with_no_implicit_href_emits_empty_in_string_mode() {
+        let map = make_anchor_map_for_target_tests();
+        let items = vec![ContentItem::TargetCounter {
+            url: TargetUrl::Attr("href".into()),
+            counter_name: "page".into(),
+            style: CounterStyle::Decimal,
+        }];
+        let out = resolve_content_to_string_with_anchor(
+            &items,
+            &BTreeMap::new(),
+            1,
+            10,
+            &BTreeMap::new(),
+            Some(&map),
+            None,
         );
         assert_eq!(out, "");
     }

@@ -1423,13 +1423,8 @@ use std::collections::BTreeMap;
 
 fn target_href<'a>(url: &'a TargetUrl, element_href: Option<&'a str>) -> Option<&'a str> {
     match url {
-        TargetUrl::Attr(name) => {
-            if name == "href" {
-                Some(element_href.unwrap_or(""))
-            } else {
-                None
-            }
-        }
+        TargetUrl::Attr(name) if name == "href" => element_href,
+        TargetUrl::Attr(_) => None,
         TargetUrl::Literal(s) => Some(s.as_str()),
     }
 }
@@ -3767,6 +3762,51 @@ mod tests {
         pass.apply(&mut doc, &ctx);
         let (_, css) = pass.into_parts();
         assert!(css.contains("\" \""), "CSS = {css}");
+    }
+
+    #[test]
+    fn counter_pass_target_without_href_attr_emits_empty_content() {
+        use crate::gcpm::{
+            ContentCounterMapping, ContentItem, CounterStyle, ParsedSelector, PseudoElement,
+            TargetUrl,
+        };
+
+        let html = r##"<html><body><span class="ref">Sec1</span></body></html>"##;
+        let mut doc = parse(html, 400.0, &[]);
+        let content = vec![
+            ContentItem::TargetCounter {
+                url: TargetUrl::Attr("href".into()),
+                counter_name: "page".into(),
+                style: CounterStyle::Decimal,
+            },
+            ContentItem::TargetCounters {
+                url: TargetUrl::Attr("href".into()),
+                counter_name: "section".into(),
+                separator: ".".into(),
+                style: CounterStyle::Decimal,
+            },
+            ContentItem::TargetText {
+                url: TargetUrl::Attr("href".into()),
+            },
+        ];
+        let mappings = vec![ContentCounterMapping {
+            parsed: ParsedSelector::Class("ref".into()),
+            pseudo: PseudoElement::After,
+            content,
+        }];
+
+        let pass = CounterPass::new(Vec::new(), mappings);
+        let ctx = PassContext { font_data: &[] };
+        pass.apply(&mut doc, &ctx);
+        let (_, css) = pass.into_parts();
+        assert!(
+            css.contains("::after{content:\"\"}"),
+            "target-* attr(href) without href should emit empty content, got {css}"
+        );
+        assert!(
+            !css.contains("\"00\"") && !css.contains("\" \""),
+            "target-* attr(href) without href should not emit placeholders, got {css}"
+        );
     }
 
     /// `url_attr != "href"` skip path on all three target-* variants:
