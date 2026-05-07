@@ -111,11 +111,13 @@ pub fn render_v2(
             // offset from the fragmenter); only y needs `body_offset_pt`
             // applied, and only on page 0 (continuation pages are already
             // page-content-area-relative after the fragmenter resets cursor_y).
-            let body_y_off = if page_idx == 0 { drawables.body_offset_pt.1 } else { 0.0 };
+            let body_y_off = if page_idx == 0 {
+                drawables.body_offset_pt.1
+            } else {
+                0.0
+            };
             let x_pt = resolved_margin.left + crate::convert::px_to_pt(first_frag.x);
-            let y_pt = resolved_margin.top
-                + body_y_off
-                + crate::convert::px_to_pt(first_frag.y);
+            let y_pt = resolved_margin.top + body_y_off + crate::convert::px_to_pt(first_frag.y);
             dest_registry.record(id.as_str(), x_pt, y_pt);
         }
     }
@@ -520,9 +522,7 @@ fn draw_v2_page(
         // that replaced content and text lines still render on page 0.
         // When body has NO BlockEntry there is nothing to double-paint,
         // so fall through to the normal dispatch path below.
-        if Some(node_id) == drawables.body_id
-            && drawables.block_styles.contains_key(&node_id)
-        {
+        if Some(node_id) == drawables.body_id && drawables.block_styles.contains_key(&node_id) {
             for frag in &geom.fragments {
                 if frag.page_index != page_index {
                     continue;
