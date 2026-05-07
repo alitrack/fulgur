@@ -1421,10 +1421,12 @@ use crate::gcpm::{
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-fn target_href<'a>(url: &'a TargetUrl, element_href: Option<&'a str>) -> Option<&'a str> {
+fn target_href<'a>(
+    url: &'a TargetUrl,
+    element: Option<&'a blitz_dom::node::ElementData>,
+) -> Option<&'a str> {
     match url {
-        TargetUrl::Attr(name) if name == "href" => element_href,
-        TargetUrl::Attr(_) => None,
+        TargetUrl::Attr(name) => element.and_then(|el| get_attr(el, name.as_str())),
         TargetUrl::Literal(s) => Some(s.as_str()),
     }
 }
@@ -1865,14 +1867,11 @@ impl CounterPass {
         // Resolve ::before now (before child traversal)
         if let Some(ref cid) = attr_value {
             use std::fmt::Write;
-            let element_href = doc
-                .get_node(node_id)
-                .and_then(|n| n.element_data())
-                .and_then(|e| get_attr(e, "href").map(str::to_owned));
+            let element = doc.get_node(node_id).and_then(|n| n.element_data());
             let mut css = self.generated_css.borrow_mut();
             for idx in &before_indices {
                 let mapping = &self.content_mappings[*idx];
-                let resolved = self.resolve_content(&mapping.content, element_href.as_deref());
+                let resolved = self.resolve_content(&mapping.content, element);
                 let _ = write!(
                     css,
                     "[data-fulgur-cid=\"{}\"]::before{{content:\"{}\"}}",
@@ -1894,14 +1893,11 @@ impl CounterPass {
         // Resolve ::after now (after child traversal, sees descendant counter changes)
         if let Some(ref cid) = attr_value {
             use std::fmt::Write;
-            let element_href = doc
-                .get_node(node_id)
-                .and_then(|n| n.element_data())
-                .and_then(|e| get_attr(e, "href").map(str::to_owned));
+            let element = doc.get_node(node_id).and_then(|n| n.element_data());
             let mut css = self.generated_css.borrow_mut();
             for idx in &after_indices {
                 let mapping = &self.content_mappings[*idx];
-                let resolved = self.resolve_content(&mapping.content, element_href.as_deref());
+                let resolved = self.resolve_content(&mapping.content, element);
                 let _ = write!(
                     css,
                     "[data-fulgur-cid=\"{}\"]::after{{content:\"{}\"}}",
@@ -1921,7 +1917,11 @@ impl CounterPass {
         self.state.borrow_mut().leave_element(node_id);
     }
 
-    fn resolve_content(&self, items: &[ContentItem], element_href: Option<&str>) -> String {
+    fn resolve_content(
+        &self,
+        items: &[ContentItem],
+        element: Option<&blitz_dom::node::ElementData>,
+    ) -> String {
         let state = self.state.borrow();
         let mut out = String::new();
         for item in items {
@@ -1950,7 +1950,7 @@ impl CounterPass {
                     counter_name,
                     style,
                 } => {
-                    let Some(href) = target_href(url, element_href) else {
+                    let Some(href) = target_href(url, element) else {
                         continue;
                     };
                     match self.anchor_map.as_ref() {
@@ -1971,7 +1971,7 @@ impl CounterPass {
                     separator,
                     style,
                 } => {
-                    let Some(href) = target_href(url, element_href) else {
+                    let Some(href) = target_href(url, element) else {
                         continue;
                     };
                     match self.anchor_map.as_ref() {
@@ -1988,7 +1988,7 @@ impl CounterPass {
                     }
                 }
                 ContentItem::TargetText { url } => {
-                    let Some(href) = target_href(url, element_href) else {
+                    let Some(href) = target_href(url, element) else {
                         continue;
                     };
                     match self.anchor_map.as_ref() {
@@ -3809,20 +3809,20 @@ mod tests {
         );
     }
 
-    /// `url_attr != "href"` skip path on all three target-* variants:
-    /// the resolver MUST emit nothing (no insert into the generated CSS
-    /// for the matched element), even when an `AnchorMap` is supplied.
-    /// Without this guard, `target-counter(attr(data-ref), page)` would
-    /// silently fall back to reading `href` and produce a wrong value.
+    /// `target-*` now resolves on arbitrary `attr(name)` targets,
+    /// not only `attr(href)`. Missing attributes still resolve to
+    /// empty content, while supplied attributes resolve against the
+    /// provided `AnchorMap`.
     #[test]
-    fn counter_pass_target_with_non_href_url_attr_emits_empty_content() {
+    fn counter_pass_target_with_custom_url_attr_resolves_via_anchor_map() {
         use crate::gcpm::target_ref::{AnchorEntry, AnchorMap};
         use crate::gcpm::{
             ContentCounterMapping, ContentItem, CounterStyle, ParsedSelector, PseudoElement,
             TargetUrl,
         };
 
-        let html = r##"<html><body><a class="ref" href="#sec1">Sec1</a></body></html>"##;
+        let html =
+            r##"<html><body><a class="ref" data-ref="#sec1" href="#other">Sec1</a></body></html>"##;
         let mut doc = parse(html, 400.0, &[]);
         let content = vec![
             ContentItem::TargetCounter {
@@ -3863,17 +3863,15 @@ mod tests {
         let ctx = PassContext { font_data: &[] };
         pass.apply(&mut doc, &ctx);
         let (_, css) = pass.into_parts();
-        // None of the would-be resolved values should leak into the CSS.
+        // Values from sec1 must be resolved through the custom attribute.
         assert!(
-            !css.contains("3") && !css.contains("1.2") && !css.contains("should-not-appear"),
-            "non-href url_attr should not produce any resolved value, got {css}"
+            css.contains("31.2") && css.contains("should-not-appear"),
+            "custom attr should resolve to the referenced anchor, got {css}"
         );
-        // The matched element still gets `::after { content: "" }` because
-        // the rule fired; assert that explicitly so a future refactor that
-        // skips the rule entirely is caught.
+        // The rule must still be emitted via the pseudo-element selector.
         assert!(
-            css.contains("::after{content:\"\"}"),
-            "matched rule should still emit empty content, got {css}"
+            css.contains("::after"),
+            "matched rule should emit after-content CSS, got {css}"
         );
     }
 

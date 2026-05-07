@@ -2377,6 +2377,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_target_counter_attr_data_ref_page() {
+        let css = r#"a::after { content: target-counter(attr(data-ref), page); }"#;
+        let g = parse_gcpm(css);
+        let mapping = &g.content_counter_mappings[0];
+        assert_eq!(
+            mapping.content,
+            vec![ContentItem::TargetCounter {
+                url: TargetUrl::Attr("data-ref".into()),
+                counter_name: "page".into(),
+                style: CounterStyle::Decimal,
+            }]
+        );
+    }
+
+    #[test]
     fn parse_target_counters_with_separator() {
         let css = r#"a::after { content: target-counters(attr(href), section, "."); }"#;
         let g = parse_gcpm(css);
