@@ -313,4 +313,31 @@ mod tests {
         assert!((m.bottom - config.margin.bottom).abs() < 0.01);
         assert!((m.left - config.margin.left).abs() < 0.01);
     }
+
+    #[test]
+    fn test_left_right_selectors_rtl() {
+        // In RTL documents the first page is :left (first_page_is_left = true).
+        // Odd pages → :left, even pages → :right.
+        let config = Config::default();
+        let rules = vec![
+            PageSettingsRule {
+                page_selector: Some(":left".into()),
+                size: None,
+                margin: PartialMargin::from_uniform(11.0),
+            },
+            PageSettingsRule {
+                page_selector: Some(":right".into()),
+                size: None,
+                margin: PartialMargin::from_uniform(22.0),
+            },
+        ];
+        let (_, m1, _) = resolve_page_settings(&rules, 1, 4, &config, true);
+        assert!((m1.top - 11.0).abs() < 0.01, "page 1 should be :left in RTL");
+        let (_, m2, _) = resolve_page_settings(&rules, 2, 4, &config, true);
+        assert!((m2.top - 22.0).abs() < 0.01, "page 2 should be :right in RTL");
+        let (_, m3, _) = resolve_page_settings(&rules, 3, 4, &config, true);
+        assert!((m3.top - 11.0).abs() < 0.01, "page 3 should be :left in RTL");
+        let (_, m4, _) = resolve_page_settings(&rules, 4, 4, &config, true);
+        assert!((m4.top - 22.0).abs() < 0.01, "page 4 should be :right in RTL");
+    }
 }
