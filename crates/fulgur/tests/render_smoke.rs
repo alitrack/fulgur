@@ -3563,7 +3563,7 @@ fn target_text_in_top_center_resolves_via_implicit_href() {
     let html = r##"
 <!doctype html>
 <html><head><style>
-  body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; }
+  body { counter-reset: chapter; font-family: 'Noto Sans', sans-serif; font-size: 12pt; }
   @page { margin: 1in; @top-center { content: "Header: " target-text(attr(href)); } }
   h2 { page-break-before: always; }
 </style></head>
@@ -3599,5 +3599,50 @@ fn target_text_in_top_center_resolves_via_implicit_href() {
          href from `<a href=\"#sec1\">`. Looked for {combined} in {} bytes \
          of decompressed PDF streams.",
         lower.len()
+    );
+}
+
+#[test]
+fn target_text_second_arg_resolves_target_fragments() {
+    let html = r##"
+<!doctype html>
+<html><head><style>
+  body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; }
+  @page {
+    margin: 1in;
+    @top-center {
+      content: "Before: " target-text(attr(href), before)
+               " After: " target-text(attr(href), after)
+               " First: " target-text(attr(href), first-letter);
+    }
+  }
+  h2 { counter-increment: chapter; }
+  h2::before { content: "BeforeFrag" counter(chapter); }
+  h2::after { content: "AfterFrag" counter(chapter); }
+</style></head>
+<body>
+  <p><a href="#sec1">Jump</a></p>
+  <h2 id="sec1">My Section Title</h2>
+</body></html>"##;
+
+    let pdf = tagged_render_with_noto(html);
+    assert!(!pdf.is_empty());
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("target-text-second-arg.pdf");
+    std::fs::write(&path, &pdf).expect("write pdf");
+
+    let output = std::process::Command::new("pdftotext")
+        .arg(&path)
+        .arg("-")
+        .output();
+    let Ok(output) = output else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("Before: BeforeFrag1 After: AfterFrag1 First: M"),
+        "target-text second-argument payload missing from extracted PDF text: {text:?}"
     );
 }

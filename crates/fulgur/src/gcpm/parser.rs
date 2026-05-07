@@ -9,7 +9,7 @@ use super::{
     ContentCounterMapping, ContentItem, CounterMapping, CounterOp, CounterStyle, ElementPolicy,
     GcpmContext, LeaderStyle, MarginBoxRule, PageSettingsRule, PageSizeDecl, ParsedSelector,
     PartialMargin, PseudoElement, RunningMapping, StringPolicy, StringSetMapping, StringSetValue,
-    TargetUrl,
+    TargetTextKind, TargetUrl,
 };
 
 // ---------------------------------------------------------------------------
@@ -1123,16 +1123,23 @@ fn parse_content_value(input: &mut Parser<'_, '_>) -> Vec<ContentItem> {
                                 Some(url) => url,
                                 None => return Ok(()),
                             };
-                            // Only the default `content` form is
-                            // implemented. Other forms
-                            // (`target-text(url, before|after|first-letter)`)
-                            // are not yet supported; if a 2nd argument is
-                            // present at all, drop the item rather than
-                            // silently treating it as the default form.
+                            let kind = input
+                                .try_parse(|input| -> Result<TargetTextKind, ParseError<'_, ()>> {
+                                    input.expect_comma()?;
+                                    let ident = input.expect_ident()?.clone();
+                                    match ident.to_ascii_lowercase().as_str() {
+                                        "content" => Ok(TargetTextKind::Content),
+                                        "before" => Ok(TargetTextKind::Before),
+                                        "after" => Ok(TargetTextKind::After),
+                                        "first-letter" => Ok(TargetTextKind::FirstLetter),
+                                        _ => Err(input.new_custom_error(())),
+                                    }
+                                })
+                                .unwrap_or_default();
                             if !input.is_exhausted() {
                                 return Ok(());
                             }
-                            items.push(ContentItem::TargetText { url });
+                            items.push(ContentItem::TargetText { url, kind });
                             return Ok(());
                         }
                         let arg = input.expect_ident()?.clone();
@@ -2415,7 +2422,8 @@ mod tests {
         assert_eq!(
             mapping.content,
             vec![ContentItem::TargetText {
-                url: TargetUrl::Attr("href".into())
+                url: TargetUrl::Attr("href".into()),
+                kind: TargetTextKind::Content,
             }]
         );
     }
@@ -2505,7 +2513,8 @@ mod tests {
         assert_eq!(
             mapping.content,
             vec![ContentItem::TargetText {
-                url: TargetUrl::Literal("#sec1".into())
+                url: TargetUrl::Literal("#sec1".into()),
+                kind: TargetTextKind::Content,
             }]
         );
     }
@@ -2518,7 +2527,8 @@ mod tests {
         assert_eq!(
             mapping.content,
             vec![ContentItem::TargetText {
-                url: TargetUrl::Literal("#sec1".into())
+                url: TargetUrl::Literal("#sec1".into()),
+                kind: TargetTextKind::Content,
             }]
         );
     }
@@ -2579,12 +2589,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_target_text_with_unsupported_2nd_arg_drops_item() {
-        // `target-text(url, before|after|first-letter)` is not yet
-        // implemented. If a 2nd argument is present at all, drop the
-        // item rather than silently aliasing it to the default
-        // `content` form (which would surface a wrong text fragment in
-        // the rendered PDF).
+    fn parse_target_text_with_supported_2nd_arg() {
         for form in ["before", "after", "first-letter", "content"] {
             let css = format!(r##"a::after {{ content: target-text(attr(href), {form}); }}"##);
             let g = parse_gcpm(&css);
@@ -2593,7 +2598,26 @@ mod tests {
                 .iter()
                 .flat_map(|m| m.content.iter())
                 .any(|i| matches!(i, ContentItem::TargetText { .. }));
-            assert!(!any_target, "2nd arg `{form}` should drop the item");
+            assert!(any_target, "2nd arg `{form}` should parse as target-text");
+        }
+    }
+
+    #[test]
+    fn parse_target_text_with_unknown_or_trailing_2nd_arg_drops_item() {
+        for css in [
+            r#"a::after { content: target-text(attr(href), unknown); }"#,
+            r#"a::after { content: target-text(attr(href), before, extra); }"#,
+        ] {
+            let g = parse_gcpm(css);
+            let any_target = g
+                .content_counter_mappings
+                .iter()
+                .flat_map(|m| m.content.iter())
+                .any(|i| matches!(i, ContentItem::TargetText { .. }));
+            assert!(
+                !any_target,
+                "unsupported form should drop target-text: {css}"
+            );
         }
     }
 
