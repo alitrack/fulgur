@@ -251,12 +251,8 @@ fn extract_body_offset_pt(doc: &HtmlDocument) -> (f32, f32) {
 fn extract_root_dir_rtl(doc: &HtmlDocument) -> bool {
     use ::style::properties::longhands::direction::computed_value::T as Dir;
     let base = doc.deref();
-    let root = doc.root_element();
-    let Some(root_node) = base.get_node(root.id) else {
-        return false;
-    };
-    root_node
-        .primary_styles()
+    base.get_node(doc.root_element().id)
+        .and_then(|n| n.primary_styles())
         .is_some_and(|s| matches!(s.get_inherited_box().clone_direction(), Dir::Rtl))
 }
 

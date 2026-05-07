@@ -515,49 +515,11 @@ fn draw_v2_page(
             continue;
         }
 
-        // Body block bg is painted by the per-page pre-pass (with
-        // content_area_h clamping) so we must not paint it again here.
-        // When body has a BlockEntry, skip the block-bg path and
-        // dispatch only the inline content (paragraph / image / svg) so
-        // that replaced content and text lines still render on page 0.
-        // When body has NO BlockEntry there is nothing to double-paint,
-        // so fall through to the normal dispatch path below.
+        // Body block bg is painted by the per-page pre-pass (paint_root_block_v2)
+        // with content_area_h clamping. Body is never a paragraph/image/svg root,
+        // so its inline children render under their own node IDs via the loop below.
+        // Skip here to avoid a double-paint of the block background.
         if Some(node_id) == drawables.body_id && drawables.block_styles.contains_key(&node_id) {
-            for frag in &geom.fragments {
-                if frag.page_index != page_index {
-                    continue;
-                }
-                let x_pt = margin_left_pt + px_to_pt(frag.x);
-                let y_pt = margin_top_pt + px_to_pt(frag.y);
-                let block = drawables.block_styles.get(&node_id).unwrap();
-                let (ix, iy) = block.style.content_inset();
-                let inner_x = x_pt + ix;
-                let inner_y = y_pt + iy;
-                let is_split = geom.is_split();
-                crate::draw_primitives::draw_with_opacity(canvas, block.opacity, |canvas| {
-                    if let Some(p) = drawables.paragraphs.get(&node_id) {
-                        draw_paragraph_inner_paint(
-                            canvas,
-                            p,
-                            inner_x,
-                            inner_y,
-                            &geom.fragments,
-                            page_index,
-                            is_split,
-                            drawables,
-                            geometry,
-                            margin_left_pt,
-                            margin_top_pt,
-                        );
-                    }
-                    if let Some(img) = drawables.images.get(&node_id) {
-                        draw_image_inner_paint(canvas, img, inner_x, inner_y);
-                    }
-                    if let Some(svg) = drawables.svgs.get(&node_id) {
-                        draw_svg_inner_paint(canvas, svg, inner_x, inner_y);
-                    }
-                });
-            }
             continue;
         }
 
