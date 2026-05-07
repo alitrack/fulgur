@@ -176,6 +176,7 @@ impl Engine {
                 1,
                 0,
                 &self.config,
+                false, // RTL not yet known at viewport setup; LTR assumed
             );
         let resolved_page_size = if resolved_landscape {
             resolved_page_size.landscape()
