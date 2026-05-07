@@ -294,31 +294,37 @@ pub enum ContentItem {
     Attr(String),
     /// A CSS leader, e.g. `leader(dotted)`.
     Leader { style: LeaderStyle },
-    /// `target-counter(<url-attr>, <counter-name>)` — resolves the named
-    /// counter at the element identified by the URL fragment in
-    /// `attr(<url-attr>)`. The current implementation restricts
-    /// `<url-attr>` to `"href"`; other attribute names yield an empty
-    /// string.
+    /// `target-counter(<url>, <counter-name>)` — resolves the named
+    /// counter at the element identified by the URL fragment.
     TargetCounter {
-        /// Attribute name read from the matched element. Always lowercase.
-        url_attr: String,
+        /// URL source for the target reference.
+        url: TargetUrl,
         /// Counter name being looked up at the target element.
         counter_name: String,
         /// Display style applied to the resolved value.
         style: CounterStyle,
     },
-    /// `target-counters(<url-attr>, <counter-name>, <separator>)` —
+    /// `target-counters(<url>, <counter-name>, <separator>)` —
     /// like `TargetCounter` but joins the entire counter chain at the
     /// target with `separator`.
     TargetCounters {
-        url_attr: String,
+        url: TargetUrl,
         counter_name: String,
         separator: String,
         style: CounterStyle,
     },
-    /// `target-text(<url-attr>)` — resolves to the text content of the
+    /// `target-text(<url>)` — resolves to the text content of the
     /// target element. Only the default `content` form is implemented.
-    TargetText { url_attr: String },
+    TargetText { url: TargetUrl },
+}
+
+/// URL source accepted by GCPM `target-*` functions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetUrl {
+    /// `attr(<ident>)` reads the URL from an attribute on the matched element.
+    Attr(String),
+    /// A string literal or `url()` literal supplies the URL directly.
+    Literal(String),
 }
 
 impl ContentItem {
@@ -596,7 +602,7 @@ mod content_item_target_tests {
     #[test]
     fn target_counter_variant_default_style_is_decimal() {
         let item = ContentItem::TargetCounter {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
             counter_name: "page".into(),
             style: CounterStyle::Decimal,
         };
@@ -616,7 +622,7 @@ mod content_item_target_tests {
             parsed: ParsedSelector::Tag("a".into()),
             pseudo: PseudoElement::Before,
             content: vec![ContentItem::TargetCounter {
-                url_attr: "href".into(),
+                url: TargetUrl::Attr("href".into()),
                 counter_name: "page".into(),
                 style: CounterStyle::Decimal,
             }],
@@ -632,7 +638,7 @@ mod content_item_target_tests {
             page_selector: None,
             position: MarginBoxPosition::TopCenter,
             content: vec![ContentItem::TargetText {
-                url_attr: "href".into(),
+                url: TargetUrl::Attr("href".into()),
             }],
             declarations: String::new(),
         });

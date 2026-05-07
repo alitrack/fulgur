@@ -218,6 +218,9 @@ path = "gcpm/leader-toc.html"
 [[fixture]]
 path = "gcpm/toc-target-counter.html"
 
+[[fixture]]
+path = "gcpm/toc-target-counter-literal.html"
+
 # fulgur-qgy7: implicit-href plumbing for `target-*(attr(href), ...)`
 # inside `@page` margin boxes.
 [[fixture]]

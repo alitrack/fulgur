@@ -9,6 +9,7 @@ use super::{
     ContentCounterMapping, ContentItem, CounterMapping, CounterOp, CounterStyle, ElementPolicy,
     GcpmContext, LeaderStyle, MarginBoxRule, PageSettingsRule, PageSizeDecl, ParsedSelector,
     PartialMargin, PseudoElement, RunningMapping, StringPolicy, StringSetMapping, StringSetValue,
+    TargetUrl,
 };
 
 // ---------------------------------------------------------------------------
@@ -908,11 +909,7 @@ fn parse_counter_style<'i>(input: &mut Parser<'i, '_>) -> Result<CounterStyle, P
 }
 
 /// Parse the `<url>` argument of a `target-*` function.
-/// Currently only the `attr(<ident>)` form is recognized — everything
-/// else (string literal, `url(...)`, `attr(<name>, <type>)`) returns
-/// `None`, causing the surrounding item to be dropped silently per
-/// design.
-fn parse_target_url_attr(input: &mut Parser<'_, '_>) -> Option<String> {
+fn parse_target_url(input: &mut Parser<'_, '_>) -> Option<TargetUrl> {
     input
         .try_parse(|input| {
             let token = input.next()?.clone();
@@ -925,13 +922,26 @@ fn parse_target_url_attr(input: &mut Parser<'_, '_>) -> Option<String> {
                         if !inner.is_exhausted() {
                             return Err(inner.new_error_for_next_token());
                         }
-                        Ok::<_, ParseError<'_, ()>>(id)
+                        Ok::<_, ParseError<'_, ()>>(TargetUrl::Attr(id.to_ascii_lowercase()))
                     }),
+                Token::QuotedString(ref s) => Ok(TargetUrl::Literal(s.to_string())),
+                Token::Function(ref name) if name.eq_ignore_ascii_case("url") => input
+                    .parse_nested_block(|inner| {
+                        let token = inner.next()?.clone();
+                        let url = match token {
+                            Token::QuotedString(ref s) | Token::UnquotedUrl(ref s) => s.to_string(),
+                            _ => return Err(inner.new_error_for_next_token()),
+                        };
+                        if !inner.is_exhausted() {
+                            return Err(inner.new_error_for_next_token());
+                        }
+                        Ok::<_, ParseError<'_, ()>>(TargetUrl::Literal(url))
+                    }),
+                Token::UnquotedUrl(ref s) => Ok(TargetUrl::Literal(s.to_string())),
                 _ => Err(input.new_error_for_next_token()),
             }
         })
         .ok()
-        .map(|s| s.to_ascii_lowercase())
 }
 
 /// Parse the policy argument of `element(name, <policy>)`.
@@ -1055,8 +1065,8 @@ fn parse_content_value(input: &mut Parser<'_, '_>) -> Vec<ContentItem> {
                         // before `expect_ident()` would consume it.
                         if fn_name.eq_ignore_ascii_case("target-counter") {
                             // Grammar: target-counter( attr(<name>) , <counter-name> [, <counter-style>]? )
-                            let url_attr = match parse_target_url_attr(input) {
-                                Some(name) => name,
+                            let url = match parse_target_url(input) {
+                                Some(url) => url,
                                 None => return Ok(()),
                             };
                             input.expect_comma()?;
@@ -1071,15 +1081,15 @@ fn parse_content_value(input: &mut Parser<'_, '_>) -> Vec<ContentItem> {
                                 return Ok(());
                             }
                             items.push(ContentItem::TargetCounter {
-                                url_attr,
+                                url,
                                 counter_name,
                                 style,
                             });
                             return Ok(());
                         }
                         if fn_name.eq_ignore_ascii_case("target-counters") {
-                            let url_attr = match parse_target_url_attr(input) {
-                                Some(name) => name,
+                            let url = match parse_target_url(input) {
+                                Some(url) => url,
                                 None => return Ok(()),
                             };
                             input.expect_comma()?;
@@ -1101,7 +1111,7 @@ fn parse_content_value(input: &mut Parser<'_, '_>) -> Vec<ContentItem> {
                                 return Ok(());
                             }
                             items.push(ContentItem::TargetCounters {
-                                url_attr,
+                                url,
                                 counter_name,
                                 separator,
                                 style,
@@ -1109,8 +1119,8 @@ fn parse_content_value(input: &mut Parser<'_, '_>) -> Vec<ContentItem> {
                             return Ok(());
                         }
                         if fn_name.eq_ignore_ascii_case("target-text") {
-                            let url_attr = match parse_target_url_attr(input) {
-                                Some(name) => name,
+                            let url = match parse_target_url(input) {
+                                Some(url) => url,
                                 None => return Ok(()),
                             };
                             // Only the default `content` form is
@@ -1122,7 +1132,7 @@ fn parse_content_value(input: &mut Parser<'_, '_>) -> Vec<ContentItem> {
                             if !input.is_exhausted() {
                                 return Ok(());
                             }
-                            items.push(ContentItem::TargetText { url_attr });
+                            items.push(ContentItem::TargetText { url });
                             return Ok(());
                         }
                         let arg = input.expect_ident()?.clone();
@@ -2359,7 +2369,7 @@ mod tests {
         assert_eq!(
             mapping.content,
             vec![ContentItem::TargetCounter {
-                url_attr: "href".into(),
+                url: TargetUrl::Attr("href".into()),
                 counter_name: "page".into(),
                 style: CounterStyle::Decimal,
             }]
@@ -2374,7 +2384,7 @@ mod tests {
         assert_eq!(
             mapping.content,
             vec![ContentItem::TargetCounters {
-                url_attr: "href".into(),
+                url: TargetUrl::Attr("href".into()),
                 counter_name: "section".into(),
                 separator: ".".into(),
                 style: CounterStyle::Decimal,
@@ -2390,27 +2400,112 @@ mod tests {
         assert_eq!(
             mapping.content,
             vec![ContentItem::TargetText {
-                url_attr: "href".into()
+                url: TargetUrl::Attr("href".into())
             }]
         );
     }
 
     #[test]
-    fn parse_target_counter_non_attr_url_drops_item() {
-        // Non-`attr(...)` URL form drops the item entirely: with no
-        // surviving target-* item the rule contains no counter-class
-        // content, so no `ContentCounterMapping` is registered.
-        // Mirror the `counters()` "missing separator" idiom from
-        // `test_parse_counters_missing_separator_drops_item` instead of
-        // indexing `[0]`.
+    fn parse_target_counter_unquoted_url_literal() {
+        let css = r##"a::after { content: target-counter(url(#sec1), page); }"##;
+        let g = parse_gcpm(css);
+        let mapping = &g.content_counter_mappings[0];
+        assert_eq!(
+            mapping.content,
+            vec![ContentItem::TargetCounter {
+                url: TargetUrl::Literal("#sec1".into()),
+                counter_name: "page".into(),
+                style: CounterStyle::Decimal,
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_target_counter_string_literal() {
         let css = r##"a::after { content: target-counter("#sec1", page); }"##;
         let g = parse_gcpm(css);
-        let any_target = g
-            .content_counter_mappings
-            .iter()
-            .flat_map(|m| m.content.iter())
-            .any(|i| matches!(i, ContentItem::TargetCounter { .. }));
-        assert!(!any_target, "non-attr URL should drop target-counter item");
+        let mapping = &g.content_counter_mappings[0];
+        assert_eq!(
+            mapping.content,
+            vec![ContentItem::TargetCounter {
+                url: TargetUrl::Literal("#sec1".into()),
+                counter_name: "page".into(),
+                style: CounterStyle::Decimal,
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_target_counter_url_literal() {
+        let css = r##"a::after { content: target-counter(url("#sec1"), page); }"##;
+        let g = parse_gcpm(css);
+        let mapping = &g.content_counter_mappings[0];
+        assert_eq!(
+            mapping.content,
+            vec![ContentItem::TargetCounter {
+                url: TargetUrl::Literal("#sec1".into()),
+                counter_name: "page".into(),
+                style: CounterStyle::Decimal,
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_target_counters_string_literal() {
+        let css = r##"a::after { content: target-counters("#sec1", section, "."); }"##;
+        let g = parse_gcpm(css);
+        let mapping = &g.content_counter_mappings[0];
+        assert_eq!(
+            mapping.content,
+            vec![ContentItem::TargetCounters {
+                url: TargetUrl::Literal("#sec1".into()),
+                counter_name: "section".into(),
+                separator: ".".into(),
+                style: CounterStyle::Decimal,
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_target_counters_url_literal() {
+        let css = r##"a::after { content: target-counters(url("#sec1"), section, "."); }"##;
+        let g = parse_gcpm(css);
+        let mapping = &g.content_counter_mappings[0];
+        assert_eq!(
+            mapping.content,
+            vec![ContentItem::TargetCounters {
+                url: TargetUrl::Literal("#sec1".into()),
+                counter_name: "section".into(),
+                separator: ".".into(),
+                style: CounterStyle::Decimal,
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_target_text_string_literal() {
+        let css = r##"a::after { content: target-text("#sec1"); }"##;
+        let g = parse_gcpm(css);
+        let mapping = &g.content_counter_mappings[0];
+        assert_eq!(
+            mapping.content,
+            vec![ContentItem::TargetText {
+                url: TargetUrl::Literal("#sec1".into())
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_target_text_url_literal() {
+        let css = r##"a::after { content: target-text(url("#sec1")); }"##;
+        let g = parse_gcpm(css);
+        let mapping = &g.content_counter_mappings[0];
+        assert_eq!(
+            mapping.content,
+            vec![ContentItem::TargetText {
+                url: TargetUrl::Literal("#sec1".into())
+            }]
+        );
     }
 
     #[test]
@@ -2498,7 +2593,7 @@ mod tests {
             g.content_counter_mappings
                 .iter()
                 .any(|m| m.content.contains(&ContentItem::TargetCounter {
-                    url_attr: "href".into(),
+                    url: TargetUrl::Attr("href".into()),
                     counter_name: "page".into(),
                     style: CounterStyle::Decimal,
                 })),
