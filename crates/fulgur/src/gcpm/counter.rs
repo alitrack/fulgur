@@ -1,9 +1,17 @@
-use super::{ContentItem, CounterStyle, StringPolicy};
+use super::{ContentItem, CounterStyle, StringPolicy, TargetUrl};
 use crate::gcpm::ElementPolicy;
 use crate::gcpm::running::RunningElementStore;
 use crate::gcpm::target_ref::AnchorMap;
 use crate::pagination_layout::{PageRunningState, StringSetPageState};
 use std::collections::BTreeMap;
+
+fn target_href<'a>(url: &'a TargetUrl, implicit_href: Option<&'a str>) -> Option<&'a str> {
+    match url {
+        TargetUrl::Attr(name) if name == "href" => implicit_href,
+        TargetUrl::Attr(_) => None,
+        TargetUrl::Literal(s) => Some(s.as_str()),
+    }
+}
 
 /// Resolve content items to a plain string.
 ///
@@ -89,14 +97,13 @@ pub fn resolve_content_to_string_with_anchor(
                 custom_counters,
             )),
             ContentItem::TargetCounter {
-                url_attr,
+                url,
                 counter_name,
                 style,
             } => {
-                if url_attr != "href" {
+                let Some(href) = target_href(url, implicit_href) else {
                     continue;
-                }
-                let href = implicit_href.unwrap_or("");
+                };
                 if let Some(map) = anchor_map {
                     out.push_str(&crate::gcpm::target_ref::resolve_target_counter(
                         href,
@@ -108,15 +115,14 @@ pub fn resolve_content_to_string_with_anchor(
                 // else: pass-1 placeholder mode — write nothing.
             }
             ContentItem::TargetCounters {
-                url_attr,
+                url,
                 counter_name,
                 separator,
                 style,
             } => {
-                if url_attr != "href" {
+                let Some(href) = target_href(url, implicit_href) else {
                     continue;
-                }
-                let href = implicit_href.unwrap_or("");
+                };
                 if let Some(map) = anchor_map {
                     out.push_str(&crate::gcpm::target_ref::resolve_target_counters(
                         href,
@@ -127,11 +133,10 @@ pub fn resolve_content_to_string_with_anchor(
                     ));
                 }
             }
-            ContentItem::TargetText { url_attr } => {
-                if url_attr != "href" {
+            ContentItem::TargetText { url } => {
+                let Some(href) = target_href(url, implicit_href) else {
                     continue;
-                }
-                let href = implicit_href.unwrap_or("");
+                };
                 if let Some(map) = anchor_map {
                     out.push_str(&crate::gcpm::target_ref::resolve_target_text(href, map));
                 }
@@ -245,14 +250,13 @@ pub fn resolve_content_to_html_with_anchor(
                     custom_counters,
                 )),
                 ContentItem::TargetCounter {
-                    url_attr,
+                    url,
                     counter_name,
                     style,
                 } => {
-                    if url_attr != "href" {
+                    let Some(href) = target_href(url, implicit_href) else {
                         continue;
-                    }
-                    let href = implicit_href.unwrap_or("");
+                    };
                     if let Some(map) = anchor_map {
                         push_escaped_html_text(
                             &mut out,
@@ -266,15 +270,14 @@ pub fn resolve_content_to_html_with_anchor(
                     }
                 }
                 ContentItem::TargetCounters {
-                    url_attr,
+                    url,
                     counter_name,
                     separator,
                     style,
                 } => {
-                    if url_attr != "href" {
+                    let Some(href) = target_href(url, implicit_href) else {
                         continue;
-                    }
-                    let href = implicit_href.unwrap_or("");
+                    };
                     if let Some(map) = anchor_map {
                         push_escaped_html_text(
                             &mut out,
@@ -288,11 +291,10 @@ pub fn resolve_content_to_html_with_anchor(
                         );
                     }
                 }
-                ContentItem::TargetText { url_attr } => {
-                    if url_attr != "href" {
+                ContentItem::TargetText { url } => {
+                    let Some(href) = target_href(url, implicit_href) else {
                         continue;
-                    }
-                    let href = implicit_href.unwrap_or("");
+                    };
                     if let Some(map) = anchor_map {
                         push_escaped_html_text(
                             &mut out,
@@ -369,11 +371,13 @@ pub fn resolve_content_to_html_with_anchor(
                         custom_counters,
                     )),
                     ContentItem::TargetCounter {
-                        url_attr,
+                        url,
                         counter_name,
                         style,
-                    } if url_attr == "href" => {
-                        let href = implicit_href.unwrap_or("");
+                    } => {
+                        let Some(href) = target_href(url, implicit_href) else {
+                            continue;
+                        };
                         if let Some(map) = anchor_map {
                             push_escaped_html_text(
                                 &mut inner,
@@ -387,12 +391,14 @@ pub fn resolve_content_to_html_with_anchor(
                         }
                     }
                     ContentItem::TargetCounters {
-                        url_attr,
+                        url,
                         counter_name,
                         separator,
                         style,
-                    } if url_attr == "href" => {
-                        let href = implicit_href.unwrap_or("");
+                    } => {
+                        let Some(href) = target_href(url, implicit_href) else {
+                            continue;
+                        };
                         if let Some(map) = anchor_map {
                             push_escaped_html_text(
                                 &mut inner,
@@ -406,8 +412,10 @@ pub fn resolve_content_to_html_with_anchor(
                             );
                         }
                     }
-                    ContentItem::TargetText { url_attr } if url_attr == "href" => {
-                        let href = implicit_href.unwrap_or("");
+                    ContentItem::TargetText { url } => {
+                        let Some(href) = target_href(url, implicit_href) else {
+                            continue;
+                        };
                         if let Some(map) = anchor_map {
                             push_escaped_html_text(
                                 &mut inner,
@@ -1839,7 +1847,7 @@ mod tests {
             },
         );
         let items = vec![ContentItem::TargetCounter {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
             counter_name: "page".into(),
             style: CounterStyle::Decimal,
         }];
@@ -1877,7 +1885,7 @@ mod tests {
     fn resolve_target_counters_in_string_mode() {
         let map = make_anchor_map_for_target_tests();
         let items = vec![ContentItem::TargetCounters {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
             counter_name: "section".into(),
             separator: ".".into(),
             style: CounterStyle::Decimal,
@@ -1898,7 +1906,7 @@ mod tests {
     fn resolve_target_text_in_string_mode() {
         let map = make_anchor_map_for_target_tests();
         let items = vec![ContentItem::TargetText {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
         }];
         let out = resolve_content_to_string_with_anchor(
             &items,
@@ -1916,7 +1924,7 @@ mod tests {
     fn resolve_target_counter_non_href_url_attr_skips_in_string_mode() {
         let map = make_anchor_map_for_target_tests();
         let items = vec![ContentItem::TargetCounter {
-            url_attr: "data-ref".into(),
+            url: TargetUrl::Attr("data-ref".into()),
             counter_name: "page".into(),
             style: CounterStyle::Decimal,
         }];
@@ -1933,10 +1941,30 @@ mod tests {
     }
 
     #[test]
+    fn resolve_target_counter_literal_in_string_mode() {
+        let map = make_anchor_map_for_target_tests();
+        let items = vec![ContentItem::TargetCounter {
+            url: TargetUrl::Literal("#sec".into()),
+            counter_name: "page".into(),
+            style: CounterStyle::Decimal,
+        }];
+        let out = resolve_content_to_string_with_anchor(
+            &items,
+            &BTreeMap::new(),
+            1,
+            10,
+            &BTreeMap::new(),
+            Some(&map),
+            None,
+        );
+        assert_eq!(out, "7");
+    }
+
+    #[test]
     fn resolve_target_counter_in_html_flat_mode_escapes_value() {
         let map = make_anchor_map_for_target_tests();
         let items = vec![ContentItem::TargetCounter {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
             counter_name: "page".into(),
             style: CounterStyle::Decimal,
         }];
@@ -1960,7 +1988,7 @@ mod tests {
     fn resolve_target_counters_in_html_flat_mode() {
         let map = make_anchor_map_for_target_tests();
         let items = vec![ContentItem::TargetCounters {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
             counter_name: "section".into(),
             separator: ".".into(),
             style: CounterStyle::Decimal,
@@ -1985,7 +2013,7 @@ mod tests {
     fn resolve_target_text_in_html_flat_mode_escapes_html_chars() {
         let map = make_anchor_map_for_target_tests();
         let items = vec![ContentItem::TargetText {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
         }];
         let store = RunningElementStore::new();
         let out = resolve_content_to_html_with_anchor(
@@ -2006,22 +2034,44 @@ mod tests {
     }
 
     #[test]
+    fn resolve_target_text_literal_in_html_flat_mode() {
+        let map = make_anchor_map_for_target_tests();
+        let items = vec![ContentItem::TargetText {
+            url: TargetUrl::Literal("#sec".into()),
+        }];
+        let store = RunningElementStore::new();
+        let out = resolve_content_to_html_with_anchor(
+            &items,
+            &store,
+            &[],
+            &BTreeMap::new(),
+            1,
+            10,
+            0,
+            &BTreeMap::new(),
+            Some(&map),
+            None,
+        );
+        assert_eq!(out, "Hello &amp; &lt;world&gt;");
+    }
+
+    #[test]
     fn resolve_target_counter_non_href_skips_in_html_flat_mode() {
         let map = make_anchor_map_for_target_tests();
         let items = vec![
             ContentItem::TargetCounter {
-                url_attr: "data-ref".into(),
+                url: TargetUrl::Attr("data-ref".into()),
                 counter_name: "page".into(),
                 style: CounterStyle::Decimal,
             },
             ContentItem::TargetCounters {
-                url_attr: "data-ref".into(),
+                url: TargetUrl::Attr("data-ref".into()),
                 counter_name: "section".into(),
                 separator: ".".into(),
                 style: CounterStyle::Decimal,
             },
             ContentItem::TargetText {
-                url_attr: "data-ref".into(),
+                url: TargetUrl::Attr("data-ref".into()),
             },
         ];
         let store = RunningElementStore::new();
@@ -2048,7 +2098,7 @@ mod tests {
         let map = make_anchor_map_for_target_tests();
         let items = vec![
             ContentItem::TargetCounter {
-                url_attr: "href".into(),
+                url: TargetUrl::Attr("href".into()),
                 counter_name: "page".into(),
                 style: CounterStyle::Decimal,
             },
@@ -2080,7 +2130,7 @@ mod tests {
         let map = make_anchor_map_for_target_tests();
         let items = vec![
             ContentItem::TargetCounters {
-                url_attr: "href".into(),
+                url: TargetUrl::Attr("href".into()),
                 counter_name: "section".into(),
                 separator: ".".into(),
                 style: CounterStyle::Decimal,
@@ -2109,11 +2159,44 @@ mod tests {
     }
 
     #[test]
+    fn resolve_target_counters_literal_in_html_flex_mode_wraps_in_span() {
+        let map = make_anchor_map_for_target_tests();
+        let items = vec![
+            ContentItem::TargetCounters {
+                url: TargetUrl::Literal("#sec".into()),
+                counter_name: "section".into(),
+                separator: ".".into(),
+                style: CounterStyle::Decimal,
+            },
+            ContentItem::Leader {
+                style: super::super::LeaderStyle::Dotted,
+            },
+        ];
+        let store = RunningElementStore::new();
+        let out = resolve_content_to_html_with_anchor(
+            &items,
+            &store,
+            &[],
+            &BTreeMap::new(),
+            1,
+            10,
+            0,
+            &BTreeMap::new(),
+            Some(&map),
+            None,
+        );
+        assert!(
+            out.contains("<span>1.2</span>"),
+            "expected flex-mode literal target-counters output to wrap chain in <span>, got {out:?}"
+        );
+    }
+
+    #[test]
     fn resolve_target_text_in_html_flex_mode_escapes_and_wraps() {
         let map = make_anchor_map_for_target_tests();
         let items = vec![
             ContentItem::TargetText {
-                url_attr: "href".into(),
+                url: TargetUrl::Attr("href".into()),
             },
             ContentItem::Leader {
                 style: super::super::LeaderStyle::Dotted,
@@ -2146,18 +2229,18 @@ mod tests {
         let map = make_anchor_map_for_target_tests();
         let items = vec![
             ContentItem::TargetCounter {
-                url_attr: "data-ref".into(),
+                url: TargetUrl::Attr("data-ref".into()),
                 counter_name: "page".into(),
                 style: CounterStyle::Decimal,
             },
             ContentItem::TargetCounters {
-                url_attr: "data-ref".into(),
+                url: TargetUrl::Attr("data-ref".into()),
                 counter_name: "section".into(),
                 separator: ".".into(),
                 style: CounterStyle::Decimal,
             },
             ContentItem::TargetText {
-                url_attr: "data-ref".into(),
+                url: TargetUrl::Attr("data-ref".into()),
             },
             ContentItem::Leader {
                 style: super::super::LeaderStyle::Dotted,
@@ -2189,7 +2272,7 @@ mod tests {
         // means the resolver writes nothing. Documents that the
         // pass-1 PDF (which is discarded) is allowed to look empty.
         let items = vec![ContentItem::TargetCounter {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
             counter_name: "page".into(),
             style: CounterStyle::Decimal,
         }];
@@ -2201,6 +2284,26 @@ mod tests {
             &BTreeMap::new(),
             None,
             Some("#sec"),
+        );
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn resolve_target_counter_with_no_implicit_href_emits_empty_in_string_mode() {
+        let map = make_anchor_map_for_target_tests();
+        let items = vec![ContentItem::TargetCounter {
+            url: TargetUrl::Attr("href".into()),
+            counter_name: "page".into(),
+            style: CounterStyle::Decimal,
+        }];
+        let out = resolve_content_to_string_with_anchor(
+            &items,
+            &BTreeMap::new(),
+            1,
+            10,
+            &BTreeMap::new(),
+            Some(&map),
+            None,
         );
         assert_eq!(out, "");
     }

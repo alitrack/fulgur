@@ -1416,10 +1416,18 @@ use crate::gcpm::running::{RunningElementStore, serialize_node};
 use crate::gcpm::string_set::{StringSetEntry, StringSetStore, extract_text_content};
 use crate::gcpm::{
     ContentCounterMapping, ContentItem, CounterMapping, CounterOp, ParsedSelector, PseudoElement,
-    RunningMapping, StringSetMapping, StringSetValue,
+    RunningMapping, StringSetMapping, StringSetValue, TargetUrl,
 };
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+
+fn target_href<'a>(url: &'a TargetUrl, element_href: Option<&'a str>) -> Option<&'a str> {
+    match url {
+        TargetUrl::Attr(name) if name == "href" => element_href,
+        TargetUrl::Attr(_) => None,
+        TargetUrl::Literal(s) => Some(s.as_str()),
+    }
+}
 
 /// Returns true for elements that should never be walked for GCPM detection
 /// (head, script, style, etc.) — they contain no user-visible content.
@@ -1938,14 +1946,13 @@ impl CounterPass {
                 // of the resolved label length. Line breaks may therefore
                 // shift between pass 1 and pass 2.
                 ContentItem::TargetCounter {
-                    url_attr,
+                    url,
                     counter_name,
                     style,
                 } => {
-                    if url_attr != "href" {
+                    let Some(href) = target_href(url, element_href) else {
                         continue;
-                    }
-                    let href = element_href.unwrap_or("");
+                    };
                     match self.anchor_map.as_ref() {
                         Some(map) => {
                             out.push_str(&crate::gcpm::target_ref::resolve_target_counter(
@@ -1959,15 +1966,14 @@ impl CounterPass {
                     }
                 }
                 ContentItem::TargetCounters {
-                    url_attr,
+                    url,
                     counter_name,
                     separator,
                     style,
                 } => {
-                    if url_attr != "href" {
+                    let Some(href) = target_href(url, element_href) else {
                         continue;
-                    }
-                    let href = element_href.unwrap_or("");
+                    };
                     match self.anchor_map.as_ref() {
                         Some(map) => {
                             out.push_str(&crate::gcpm::target_ref::resolve_target_counters(
@@ -1981,11 +1987,10 @@ impl CounterPass {
                         None => out.push_str("00"),
                     }
                 }
-                ContentItem::TargetText { url_attr } => {
-                    if url_attr != "href" {
+                ContentItem::TargetText { url } => {
+                    let Some(href) = target_href(url, element_href) else {
                         continue;
-                    }
-                    let href = element_href.unwrap_or("");
+                    };
                     match self.anchor_map.as_ref() {
                         Some(map) => {
                             out.push_str(&crate::gcpm::target_ref::resolve_target_text(href, map))
@@ -3511,12 +3516,13 @@ mod tests {
         use crate::gcpm::target_ref::{AnchorEntry, AnchorMap};
         use crate::gcpm::{
             ContentCounterMapping, ContentItem, CounterStyle, ParsedSelector, PseudoElement,
+            TargetUrl,
         };
 
         let html = r##"<html><body><a class="ref" href="#sec1">Sec1</a></body></html>"##;
         let mut doc = parse(html, 400.0, &[]);
         let content = vec![ContentItem::TargetCounter {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
             counter_name: "page".into(),
             style: CounterStyle::Decimal,
         }];
@@ -3545,6 +3551,47 @@ mod tests {
         assert!(css.contains("\"3\""), "CSS = {css}");
     }
 
+    /// Literal URL form does not depend on the matched element's `href`.
+    #[test]
+    fn counter_pass_resolves_target_counter_literal_with_anchor_map() {
+        use crate::gcpm::target_ref::{AnchorEntry, AnchorMap};
+        use crate::gcpm::{
+            ContentCounterMapping, ContentItem, CounterStyle, ParsedSelector, PseudoElement,
+            TargetUrl,
+        };
+
+        let html = r##"<html><body><span class="ref">Sec1</span></body></html>"##;
+        let mut doc = parse(html, 400.0, &[]);
+        let content = vec![ContentItem::TargetCounter {
+            url: TargetUrl::Literal("#sec1".into()),
+            counter_name: "page".into(),
+            style: CounterStyle::Decimal,
+        }];
+        let mappings = vec![ContentCounterMapping {
+            parsed: ParsedSelector::Class("ref".into()),
+            pseudo: PseudoElement::After,
+            content,
+        }];
+
+        let mut anchor = AnchorMap::new();
+        let mut counters = BTreeMap::new();
+        counters.insert("page".into(), vec![4]);
+        anchor.insert(
+            "sec1",
+            AnchorEntry {
+                page_num: 4,
+                counters,
+                text: String::new(),
+            },
+        );
+
+        let pass = CounterPass::new(Vec::new(), mappings).with_anchor_map(anchor);
+        let ctx = PassContext { font_data: &[] };
+        pass.apply(&mut doc, &ctx);
+        let (_, css) = pass.into_parts();
+        assert!(css.contains("\"4\""), "CSS = {css}");
+    }
+
     /// Pass-1 placeholder path: when no `AnchorMap` is supplied (the
     /// pre-pagination pass), `target-counter()` inside `::after` content
     /// must substitute the `"00"` placeholder. Width is a rough
@@ -3553,12 +3600,13 @@ mod tests {
     fn counter_pass_target_counter_emits_placeholder_in_pass_one() {
         use crate::gcpm::{
             ContentCounterMapping, ContentItem, CounterStyle, ParsedSelector, PseudoElement,
+            TargetUrl,
         };
 
         let html = r##"<html><body><a class="ref" href="#sec1">Sec1</a></body></html>"##;
         let mut doc = parse(html, 400.0, &[]);
         let content = vec![ContentItem::TargetCounter {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
             counter_name: "page".into(),
             style: CounterStyle::Decimal,
         }];
@@ -3583,12 +3631,14 @@ mod tests {
     #[test]
     fn counter_pass_resolves_target_text_with_anchor_map() {
         use crate::gcpm::target_ref::{AnchorEntry, AnchorMap};
-        use crate::gcpm::{ContentCounterMapping, ContentItem, ParsedSelector, PseudoElement};
+        use crate::gcpm::{
+            ContentCounterMapping, ContentItem, ParsedSelector, PseudoElement, TargetUrl,
+        };
 
         let html = r##"<html><body><a class="ref" href="#sec1">Sec1</a></body></html>"##;
         let mut doc = parse(html, 400.0, &[]);
         let content = vec![ContentItem::TargetText {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
         }];
         let mappings = vec![ContentCounterMapping {
             parsed: ParsedSelector::Class("ref".into()),
@@ -3621,12 +3671,13 @@ mod tests {
         use crate::gcpm::target_ref::{AnchorEntry, AnchorMap};
         use crate::gcpm::{
             ContentCounterMapping, ContentItem, CounterStyle, ParsedSelector, PseudoElement,
+            TargetUrl,
         };
 
         let html = r##"<html><body><a class="ref" href="#sec1">Sec1</a></body></html>"##;
         let mut doc = parse(html, 400.0, &[]);
         let content = vec![ContentItem::TargetCounters {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
             counter_name: "section".into(),
             separator: ".".into(),
             style: CounterStyle::Decimal,
@@ -3663,12 +3714,13 @@ mod tests {
     fn counter_pass_target_counters_emits_placeholder_in_pass_one() {
         use crate::gcpm::{
             ContentCounterMapping, ContentItem, CounterStyle, ParsedSelector, PseudoElement,
+            TargetUrl,
         };
 
         let html = r##"<html><body><a class="ref" href="#sec1">Sec1</a></body></html>"##;
         let mut doc = parse(html, 400.0, &[]);
         let content = vec![ContentItem::TargetCounters {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
             counter_name: "section".into(),
             separator: ".".into(),
             style: CounterStyle::Decimal,
@@ -3690,12 +3742,14 @@ mod tests {
     /// reservation only — actual heading text is unknown pre-pagination).
     #[test]
     fn counter_pass_target_text_emits_space_placeholder_in_pass_one() {
-        use crate::gcpm::{ContentCounterMapping, ContentItem, ParsedSelector, PseudoElement};
+        use crate::gcpm::{
+            ContentCounterMapping, ContentItem, ParsedSelector, PseudoElement, TargetUrl,
+        };
 
         let html = r##"<html><body><a class="ref" href="#sec1">Sec1</a></body></html>"##;
         let mut doc = parse(html, 400.0, &[]);
         let content = vec![ContentItem::TargetText {
-            url_attr: "href".into(),
+            url: TargetUrl::Attr("href".into()),
         }];
         let mappings = vec![ContentCounterMapping {
             parsed: ParsedSelector::Class("ref".into()),
@@ -3710,6 +3764,51 @@ mod tests {
         assert!(css.contains("\" \""), "CSS = {css}");
     }
 
+    #[test]
+    fn counter_pass_target_without_href_attr_emits_empty_content() {
+        use crate::gcpm::{
+            ContentCounterMapping, ContentItem, CounterStyle, ParsedSelector, PseudoElement,
+            TargetUrl,
+        };
+
+        let html = r##"<html><body><span class="ref">Sec1</span></body></html>"##;
+        let mut doc = parse(html, 400.0, &[]);
+        let content = vec![
+            ContentItem::TargetCounter {
+                url: TargetUrl::Attr("href".into()),
+                counter_name: "page".into(),
+                style: CounterStyle::Decimal,
+            },
+            ContentItem::TargetCounters {
+                url: TargetUrl::Attr("href".into()),
+                counter_name: "section".into(),
+                separator: ".".into(),
+                style: CounterStyle::Decimal,
+            },
+            ContentItem::TargetText {
+                url: TargetUrl::Attr("href".into()),
+            },
+        ];
+        let mappings = vec![ContentCounterMapping {
+            parsed: ParsedSelector::Class("ref".into()),
+            pseudo: PseudoElement::After,
+            content,
+        }];
+
+        let pass = CounterPass::new(Vec::new(), mappings);
+        let ctx = PassContext { font_data: &[] };
+        pass.apply(&mut doc, &ctx);
+        let (_, css) = pass.into_parts();
+        assert!(
+            css.contains("::after{content:\"\"}"),
+            "target-* attr(href) without href should emit empty content, got {css}"
+        );
+        assert!(
+            !css.contains("\"00\"") && !css.contains("\" \""),
+            "target-* attr(href) without href should not emit placeholders, got {css}"
+        );
+    }
+
     /// `url_attr != "href"` skip path on all three target-* variants:
     /// the resolver MUST emit nothing (no insert into the generated CSS
     /// for the matched element), even when an `AnchorMap` is supplied.
@@ -3720,24 +3819,25 @@ mod tests {
         use crate::gcpm::target_ref::{AnchorEntry, AnchorMap};
         use crate::gcpm::{
             ContentCounterMapping, ContentItem, CounterStyle, ParsedSelector, PseudoElement,
+            TargetUrl,
         };
 
         let html = r##"<html><body><a class="ref" href="#sec1">Sec1</a></body></html>"##;
         let mut doc = parse(html, 400.0, &[]);
         let content = vec![
             ContentItem::TargetCounter {
-                url_attr: "data-ref".into(),
+                url: TargetUrl::Attr("data-ref".into()),
                 counter_name: "page".into(),
                 style: CounterStyle::Decimal,
             },
             ContentItem::TargetCounters {
-                url_attr: "data-ref".into(),
+                url: TargetUrl::Attr("data-ref".into()),
                 counter_name: "section".into(),
                 separator: ".".into(),
                 style: CounterStyle::Decimal,
             },
             ContentItem::TargetText {
-                url_attr: "data-ref".into(),
+                url: TargetUrl::Attr("data-ref".into()),
             },
         ];
         let mappings = vec![ContentCounterMapping {
