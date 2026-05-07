@@ -5,8 +5,8 @@
 //! assigned each DOM element a page) and consumed by pass 2 via the
 //! resolver helpers below.
 
-use crate::gcpm::CounterStyle;
 use crate::gcpm::counter::{format_counter, format_counter_chain};
+use crate::gcpm::{CounterStyle, TargetTextKind};
 use crate::pagination_layout::PaginationGeometryTable;
 use std::collections::BTreeMap;
 
@@ -22,6 +22,14 @@ pub struct AnchorEntry {
     /// element. Mirrors `CounterState::chain_snapshot`.
     pub counters: BTreeMap<String, Vec<i32>>,
     pub text: String,
+    pub before_text: String,
+    pub after_text: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AnchorPseudoText {
+    pub before_text: String,
+    pub after_text: String,
 }
 
 impl AnchorMap {
@@ -103,11 +111,24 @@ pub fn resolve_target_counters(
     format_counter_chain(chain, separator, style)
 }
 
-pub fn resolve_target_text(href: &str, map: &AnchorMap) -> String {
+pub fn resolve_target_text(href: &str, kind: TargetTextKind, map: &AnchorMap) -> String {
     let Some(frag) = fragment_id_from_href(href) else {
         return String::new();
     };
-    map.get(frag).map(|e| e.text.clone()).unwrap_or_default()
+    let Some(entry) = map.get(frag) else {
+        return String::new();
+    };
+    match kind {
+        TargetTextKind::Content => entry.text.clone(),
+        TargetTextKind::Before => entry.before_text.clone(),
+        TargetTextKind::After => entry.after_text.clone(),
+        TargetTextKind::FirstLetter => entry
+            .text
+            .chars()
+            .next()
+            .map(|c| c.to_string())
+            .unwrap_or_default(),
+    }
 }
 
 /// Return the **1-based** page number for a DOM node, derived from
@@ -135,6 +156,8 @@ mod tests {
                 page_num: 7,
                 counters,
                 text: "Introduction".into(),
+                before_text: "Before".into(),
+                after_text: "After".into(),
             },
         );
         m
@@ -177,6 +200,8 @@ mod tests {
                 page_num: 5,
                 counters,
                 text: String::new(),
+                before_text: String::new(),
+                after_text: String::new(),
             },
         );
         assert_eq!(
@@ -224,13 +249,36 @@ mod tests {
     #[test]
     fn target_text_returns_text() {
         let m = make_map();
-        assert_eq!(resolve_target_text("#sec-1-2", &m), "Introduction");
+        assert_eq!(
+            resolve_target_text("#sec-1-2", TargetTextKind::Content, &m),
+            "Introduction"
+        );
+    }
+
+    #[test]
+    fn target_text_returns_before_after_and_first_letter() {
+        let m = make_map();
+        assert_eq!(
+            resolve_target_text("#sec-1-2", TargetTextKind::Before, &m),
+            "Before"
+        );
+        assert_eq!(
+            resolve_target_text("#sec-1-2", TargetTextKind::After, &m),
+            "After"
+        );
+        assert_eq!(
+            resolve_target_text("#sec-1-2", TargetTextKind::FirstLetter, &m),
+            "I"
+        );
     }
 
     #[test]
     fn target_text_missing_returns_empty() {
         let m = make_map();
-        assert_eq!(resolve_target_text("#nope", &m), "");
+        assert_eq!(
+            resolve_target_text("#nope", TargetTextKind::Content, &m),
+            ""
+        );
     }
 
     #[test]
@@ -337,6 +385,9 @@ mod tests {
     #[test]
     fn target_text_external_href_returns_empty() {
         let m = make_map();
-        assert_eq!(resolve_target_text("https://example.com/", &m), "");
+        assert_eq!(
+            resolve_target_text("https://example.com/", TargetTextKind::Content, &m),
+            ""
+        );
     }
 }

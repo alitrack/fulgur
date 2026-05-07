@@ -9,7 +9,7 @@ use super::{
     ContentCounterMapping, ContentItem, CounterMapping, CounterOp, CounterStyle, ElementPolicy,
     GcpmContext, LeaderStyle, MarginBoxRule, PageSettingsRule, PageSizeDecl, ParsedSelector,
     PartialMargin, PseudoElement, RunningMapping, StringPolicy, StringSetMapping, StringSetValue,
-    TargetUrl,
+    TargetTextKind, TargetUrl,
 };
 
 // ---------------------------------------------------------------------------
@@ -728,13 +728,18 @@ impl<'i, 'a> DeclarationParser<'i> for StyleRuleParser<'a> {
                         | ContentItem::TargetText { .. }
                 )
             });
+            let is_plain_text = !items.is_empty()
+                && items
+                    .iter()
+                    .all(|item| matches!(item, ContentItem::String(_)));
             // Last-declaration-wins: always update content_items (clear when
-            // the new content has no counter()).
-            if has_counter {
+            // the new content cannot be represented by CounterPass).
+            if has_counter || is_plain_text {
                 *self.content_items = Some(items);
-                // Strip the original `content: counter(...)` from cleaned CSS
-                // because Blitz cannot evaluate counter() — CounterPass injects
-                // a synthetic ::before/::after rule with the resolved value.
+                // Strip the original declaration. CounterPass injects a
+                // synthetic ::before/::after rule with the resolved value;
+                // leaving the original in place would duplicate plain text
+                // pseudos and Blitz cannot evaluate target/counter content.
                 let start = decl_start.position().byte_index();
                 let end = input.position().byte_index();
                 self.edits.push(CssEdit::Replace {
@@ -743,8 +748,8 @@ impl<'i, 'a> DeclarationParser<'i> for StyleRuleParser<'a> {
                     replacement: String::new(),
                 });
             } else {
-                // Plain `content: "..."` stays in cleaned CSS so Blitz can
-                // render it directly.
+                // Unsupported forms (e.g. content: url(...)) stay in cleaned
+                // CSS so Blitz can render what it supports directly.
                 *self.content_items = None;
             }
         } else {
@@ -1123,16 +1128,23 @@ fn parse_content_value(input: &mut Parser<'_, '_>) -> Vec<ContentItem> {
                                 Some(url) => url,
                                 None => return Ok(()),
                             };
-                            // Only the default `content` form is
-                            // implemented. Other forms
-                            // (`target-text(url, before|after|first-letter)`)
-                            // are not yet supported; if a 2nd argument is
-                            // present at all, drop the item rather than
-                            // silently treating it as the default form.
+                            let kind = input
+                                .try_parse(|input| -> Result<TargetTextKind, ParseError<'_, ()>> {
+                                    input.expect_comma()?;
+                                    let ident = input.expect_ident()?.clone();
+                                    match ident.to_ascii_lowercase().as_str() {
+                                        "content" => Ok(TargetTextKind::Content),
+                                        "before" => Ok(TargetTextKind::Before),
+                                        "after" => Ok(TargetTextKind::After),
+                                        "first-letter" => Ok(TargetTextKind::FirstLetter),
+                                        _ => Err(input.new_custom_error(())),
+                                    }
+                                })
+                                .unwrap_or_default();
                             if !input.is_exhausted() {
                                 return Ok(());
                             }
-                            items.push(ContentItem::TargetText { url });
+                            items.push(ContentItem::TargetText { url, kind });
                             return Ok(());
                         }
                         let arg = input.expect_ident()?.clone();
@@ -1935,17 +1947,22 @@ mod tests {
 
     #[test]
     fn test_parse_pseudo_content_without_counter_kept_in_cleaned_css() {
-        // Plain string content (no counter()) must remain in cleaned CSS so
-        // Blitz can render it directly. Stripping it would break authors who
-        // use ::before/::after for purely decorative literals.
+        // Plain string content is routed through CounterPass so pass 1 can
+        // record it for `target-text(..., before|after)`. The original
+        // declaration is stripped to avoid duplicate pseudo rendering.
         let css = r#".note::before { content: "Note: "; font-weight: bold; }"#;
         let ctx = parse_gcpm(css);
         assert!(
-            ctx.cleaned_css.contains(r#"content: "Note: ""#),
-            "literal content must survive in cleaned_css: {:?}",
+            !ctx.cleaned_css.contains(r#"content: "Note: ""#),
+            "literal content must be injected by CounterPass only: {:?}",
             ctx.cleaned_css
         );
         assert!(ctx.cleaned_css.contains("font-weight: bold"));
+        assert_eq!(ctx.content_counter_mappings.len(), 1);
+        assert_eq!(
+            ctx.content_counter_mappings[0].content,
+            vec![ContentItem::String("Note: ".into())]
+        );
     }
 
     #[test]
@@ -2415,7 +2432,8 @@ mod tests {
         assert_eq!(
             mapping.content,
             vec![ContentItem::TargetText {
-                url: TargetUrl::Attr("href".into())
+                url: TargetUrl::Attr("href".into()),
+                kind: TargetTextKind::Content,
             }]
         );
     }
@@ -2505,7 +2523,8 @@ mod tests {
         assert_eq!(
             mapping.content,
             vec![ContentItem::TargetText {
-                url: TargetUrl::Literal("#sec1".into())
+                url: TargetUrl::Literal("#sec1".into()),
+                kind: TargetTextKind::Content,
             }]
         );
     }
@@ -2518,7 +2537,8 @@ mod tests {
         assert_eq!(
             mapping.content,
             vec![ContentItem::TargetText {
-                url: TargetUrl::Literal("#sec1".into())
+                url: TargetUrl::Literal("#sec1".into()),
+                kind: TargetTextKind::Content,
             }]
         );
     }
@@ -2579,12 +2599,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_target_text_with_unsupported_2nd_arg_drops_item() {
-        // `target-text(url, before|after|first-letter)` is not yet
-        // implemented. If a 2nd argument is present at all, drop the
-        // item rather than silently aliasing it to the default
-        // `content` form (which would surface a wrong text fragment in
-        // the rendered PDF).
+    fn parse_target_text_with_supported_2nd_arg() {
         for form in ["before", "after", "first-letter", "content"] {
             let css = format!(r##"a::after {{ content: target-text(attr(href), {form}); }}"##);
             let g = parse_gcpm(&css);
@@ -2593,7 +2608,7 @@ mod tests {
                 .iter()
                 .flat_map(|m| m.content.iter())
                 .any(|i| matches!(i, ContentItem::TargetText { .. }));
-            assert!(!any_target, "2nd arg `{form}` should drop the item");
+            assert!(any_target, "2nd arg `{form}` should parse as target-text");
         }
     }
 

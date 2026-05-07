@@ -283,7 +283,7 @@ impl Engine {
         // value is the full nesting chain (`Vec<i32>`, outer-to-inner)
         // per CSS Lists 3 §4.5, so both `counter()` (innermost) and
         // `counters()` (joined) can resolve directly.
-        let (counter_ops_by_node_vec, counter_css, counter_snapshots) =
+        let (counter_ops_by_node_vec, counter_css, counter_snapshots, pseudo_texts) =
             if !gcpm.counter_mappings.is_empty() || !gcpm.content_counter_mappings.is_empty() {
                 let mut pass = crate::blitz_adapter::CounterPass::new(
                     gcpm.counter_mappings.clone(),
@@ -297,10 +297,11 @@ impl Engine {
                 }
                 crate::blitz_adapter::apply_single_pass(&pass, &mut doc, &ctx);
                 let snapshots = pass.take_node_snapshots();
+                let pseudo_texts = pass.take_pseudo_texts();
                 let (ops, css) = pass.into_parts();
-                (ops, css, snapshots)
+                (ops, css, snapshots, pseudo_texts)
             } else {
-                (Vec::new(), String::new(), BTreeMap::new())
+                (Vec::new(), String::new(), BTreeMap::new(), BTreeMap::new())
             };
 
         // Inject counter-resolved CSS for ::before/::after. Must happen
@@ -496,7 +497,12 @@ impl Engine {
         // `walk_anchors` short-circuits on `MAX_DOM_DEPTH`.
         let needs_anchor_map_for_pass_two = anchor_map.is_none() && has_target_refs;
         let collected_anchor_map = if needs_anchor_map_for_pass_two {
-            build_anchor_map(&doc, &pagination_geometry, &counter_snapshots_for_anchor)
+            build_anchor_map(
+                &doc,
+                &pagination_geometry,
+                &counter_snapshots_for_anchor,
+                &pseudo_texts,
+            )
         } else {
             AnchorMap::default()
         };
@@ -798,7 +804,9 @@ impl Engine {
 }
 
 use crate::blitz_adapter::get_attr;
-use crate::gcpm::target_ref::{AnchorEntry, AnchorMap, fragment_id_from_href, page_for_node};
+use crate::gcpm::target_ref::{
+    AnchorEntry, AnchorMap, AnchorPseudoText, fragment_id_from_href, page_for_node,
+};
 use crate::pagination_layout::PaginationGeometryTable;
 use blitz_dom::BaseDocument;
 
@@ -806,6 +814,7 @@ fn build_anchor_map(
     doc: &BaseDocument,
     pagination_geometry: &PaginationGeometryTable,
     counter_snapshots: &BTreeMap<usize, BTreeMap<String, Vec<i32>>>,
+    pseudo_texts: &BTreeMap<usize, AnchorPseudoText>,
 ) -> AnchorMap {
     let mut map = AnchorMap::new();
     walk_anchors(
@@ -814,6 +823,7 @@ fn build_anchor_map(
         0,
         pagination_geometry,
         counter_snapshots,
+        pseudo_texts,
         &mut map,
     );
     map
@@ -825,6 +835,7 @@ fn walk_anchors(
     depth: usize,
     geometry: &PaginationGeometryTable,
     snapshots: &BTreeMap<usize, BTreeMap<String, Vec<i32>>>,
+    pseudo_texts: &BTreeMap<usize, AnchorPseudoText>,
     out: &mut AnchorMap,
 ) {
     if depth >= crate::MAX_DOM_DEPTH {
@@ -844,18 +855,21 @@ fn walk_anchors(
     {
         let counters = snapshots.get(&node_id).cloned().unwrap_or_default();
         let text = collect_text_content(doc, node_id);
+        let pseudo_text = pseudo_texts.get(&node_id).cloned().unwrap_or_default();
         out.insert(
             frag.to_string(),
             AnchorEntry {
                 page_num,
                 counters,
                 text,
+                before_text: pseudo_text.before_text,
+                after_text: pseudo_text.after_text,
             },
         );
     }
     let children: Vec<usize> = node.children.clone();
     for c in children {
-        walk_anchors(doc, c, depth + 1, geometry, snapshots, out);
+        walk_anchors(doc, c, depth + 1, geometry, snapshots, pseudo_texts, out);
     }
 }
 

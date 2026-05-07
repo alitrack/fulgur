@@ -313,9 +313,12 @@ pub enum ContentItem {
         separator: String,
         style: CounterStyle,
     },
-    /// `target-text(<url>)` — resolves to the text content of the
-    /// target element. Only the default `content` form is implemented.
-    TargetText { url: TargetUrl },
+    /// `target-text(<url>[, <kind>])` — resolves text associated with
+    /// the target element.
+    TargetText {
+        url: TargetUrl,
+        kind: TargetTextKind,
+    },
 }
 
 /// URL source accepted by GCPM `target-*` functions.
@@ -325,6 +328,20 @@ pub enum TargetUrl {
     Attr(String),
     /// A string literal or `url()` literal supplies the URL directly.
     Literal(String),
+}
+
+/// Which text fragment of the target element `target-text()` resolves to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TargetTextKind {
+    /// `target-text(<url>)` or `target-text(<url>, content)`.
+    #[default]
+    Content,
+    /// `target-text(<url>, before)` — text from `::before` pseudo-element.
+    Before,
+    /// `target-text(<url>, after)` — text from `::after` pseudo-element.
+    After,
+    /// `target-text(<url>, first-letter)` — first grapheme cluster of content.
+    FirstLetter,
 }
 
 impl ContentItem {
@@ -639,6 +656,7 @@ mod content_item_target_tests {
             position: MarginBoxPosition::TopCenter,
             content: vec![ContentItem::TargetText {
                 url: TargetUrl::Attr("href".into()),
+                kind: TargetTextKind::Content,
             }],
             declarations: String::new(),
         });

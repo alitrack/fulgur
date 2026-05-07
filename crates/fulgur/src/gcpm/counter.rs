@@ -133,12 +133,14 @@ pub fn resolve_content_to_string_with_anchor(
                     ));
                 }
             }
-            ContentItem::TargetText { url } => {
+            ContentItem::TargetText { url, kind } => {
                 let Some(href) = target_href(url, implicit_href) else {
                     continue;
                 };
                 if let Some(map) = anchor_map {
-                    out.push_str(&crate::gcpm::target_ref::resolve_target_text(href, map));
+                    out.push_str(&crate::gcpm::target_ref::resolve_target_text(
+                        href, *kind, map,
+                    ));
                 }
             }
             ContentItem::ContentText
@@ -291,14 +293,14 @@ pub fn resolve_content_to_html_with_anchor(
                         );
                     }
                 }
-                ContentItem::TargetText { url } => {
+                ContentItem::TargetText { url, kind } => {
                     let Some(href) = target_href(url, implicit_href) else {
                         continue;
                     };
                     if let Some(map) = anchor_map {
                         push_escaped_html_text(
                             &mut out,
-                            &crate::gcpm::target_ref::resolve_target_text(href, map),
+                            &crate::gcpm::target_ref::resolve_target_text(href, *kind, map),
                         );
                     }
                 }
@@ -412,14 +414,14 @@ pub fn resolve_content_to_html_with_anchor(
                             );
                         }
                     }
-                    ContentItem::TargetText { url } => {
+                    ContentItem::TargetText { url, kind } => {
                         let Some(href) = target_href(url, implicit_href) else {
                             continue;
                         };
                         if let Some(map) = anchor_map {
                             push_escaped_html_text(
                                 &mut inner,
-                                &crate::gcpm::target_ref::resolve_target_text(href, map),
+                                &crate::gcpm::target_ref::resolve_target_text(href, *kind, map),
                             );
                         }
                     }
@@ -782,6 +784,7 @@ impl CounterState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gcpm::TargetTextKind;
 
     #[test]
     fn test_resolve_counters() {
@@ -1844,6 +1847,8 @@ mod tests {
                 page_num: 5,
                 counters,
                 text: "Hello".into(),
+                before_text: String::new(),
+                after_text: String::new(),
             },
         );
         let items = vec![ContentItem::TargetCounter {
@@ -1876,6 +1881,8 @@ mod tests {
                 page_num: 7,
                 counters,
                 text: "Hello & <world>".into(),
+                before_text: "Before".into(),
+                after_text: "After".into(),
             },
         );
         map
@@ -1907,6 +1914,7 @@ mod tests {
         let map = make_anchor_map_for_target_tests();
         let items = vec![ContentItem::TargetText {
             url: TargetUrl::Attr("href".into()),
+            kind: TargetTextKind::Content,
         }];
         let out = resolve_content_to_string_with_anchor(
             &items,
@@ -2014,6 +2022,7 @@ mod tests {
         let map = make_anchor_map_for_target_tests();
         let items = vec![ContentItem::TargetText {
             url: TargetUrl::Attr("href".into()),
+            kind: TargetTextKind::Content,
         }];
         let store = RunningElementStore::new();
         let out = resolve_content_to_html_with_anchor(
@@ -2038,6 +2047,7 @@ mod tests {
         let map = make_anchor_map_for_target_tests();
         let items = vec![ContentItem::TargetText {
             url: TargetUrl::Literal("#sec".into()),
+            kind: TargetTextKind::Content,
         }];
         let store = RunningElementStore::new();
         let out = resolve_content_to_html_with_anchor(
@@ -2072,6 +2082,7 @@ mod tests {
             },
             ContentItem::TargetText {
                 url: TargetUrl::Attr("data-ref".into()),
+                kind: TargetTextKind::Content,
             },
         ];
         let store = RunningElementStore::new();
@@ -2197,6 +2208,7 @@ mod tests {
         let items = vec![
             ContentItem::TargetText {
                 url: TargetUrl::Attr("href".into()),
+                kind: TargetTextKind::Content,
             },
             ContentItem::Leader {
                 style: super::super::LeaderStyle::Dotted,
@@ -2241,6 +2253,7 @@ mod tests {
             },
             ContentItem::TargetText {
                 url: TargetUrl::Attr("data-ref".into()),
+                kind: TargetTextKind::Content,
             },
             ContentItem::Leader {
                 style: super::super::LeaderStyle::Dotted,
