@@ -167,6 +167,51 @@ fn test_element_policy_first_except() {
 }
 
 #[test]
+fn test_element_policy_start() {
+    let css = r#"
+        @page {
+            size: 400pt 300pt;
+            margin: 40pt;
+            @top-center { content: element(title, start); }
+        }
+        .title { position: running(title); }
+        .spacer { height: 220pt; }
+    "#;
+
+    let html = r#"<!DOCTYPE html>
+    <html>
+    <head></head>
+    <body>
+      <h1 class="title">Seed Title</h1>
+      <div class="spacer"></div>
+      <div style="page-break-before: always">
+        <p>Page two has no running title and should keep the previous value.</p>
+      </div>
+      <div class="spacer"></div>
+      <div style="page-break-before: always">
+        <h1 class="title">New Seed Title</h1>
+        <p>Page three introduces a new running element, but start should ignore the local value.</p>
+      </div>
+    </body>
+    </html>"#;
+
+    let mut assets = AssetBundle::new();
+    assets.add_css(css);
+
+    let engine = Engine::builder().assets(assets).build();
+    let pdf = engine
+        .render_html(html)
+        .expect("render should succeed with element(title, start)");
+
+    assert!(
+        pdf.len() > 1000,
+        "PDF seems empty or too small: {} bytes",
+        pdf.len()
+    );
+    assert!(pdf.starts_with(b"%PDF-"));
+}
+
+#[test]
 fn test_element_default_policy_still_works() {
     // Baseline: element(title) without an explicit policy must still render
     // (default = first), matching pre-policy behavior.

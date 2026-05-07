@@ -196,6 +196,18 @@ path = "gcpm/counter-page-numbers.html"
 path = "gcpm/string-set.html"
 
 [[fixture]]
+path = "gcpm/element-policy-first.html"
+
+[[fixture]]
+path = "gcpm/element-policy-last.html"
+
+[[fixture]]
+path = "gcpm/element-policy-start.html"
+
+[[fixture]]
+path = "gcpm/element-policy-first-except.html"
+
+[[fixture]]
 path = "gcpm/bookmark-outline.html"
 bookmarks = true
 

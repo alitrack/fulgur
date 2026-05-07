@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+@page {
+  size: 400pt 300pt;
+  margin: 40pt;
+  @top-center { content: "first-except: " element(title, first-except); font-size: 9pt; color: #555; }
+}
+body { font-family: sans-serif; font-size: 11pt; line-height: 1.6; margin: 0; }
+.title { position: running(title); border-bottom: 1pt solid #999; padding-bottom: 4pt; }
+.spacer { height: 220pt; margin: 8pt 0; border: 1pt solid #ddd; background: #f9f9f9; }
+</style>
+</head>
+<body>
+<div class="title">First-Except Seed</div>
+<div class="spacer">First page carries assignment, so header area should be empty.</div>
+
+<div style="page-break-before: always"></div>
+<p style="margin-top: 0">Page two has no assignment, so it should inherit page one.</p>
+<div class="spacer">No heading on this page means fallback from prior page.</div>
+
+<div style="page-break-before: always"></div>
+<div class="title">First-Except New</div>
+<div class="spacer">Third page has assignment, so its header should be empty again.</div>
+
+<div style="page-break-before: always"></div>
+<p style="margin-top: 0">Page four has no assignment, so it should show the latest value.</p>
+<div class="spacer">The fallback text should reappear here.</div>
+</body>
+</html>
