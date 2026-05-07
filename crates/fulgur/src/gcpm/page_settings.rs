@@ -332,12 +332,24 @@ mod tests {
             },
         ];
         let (_, m1, _) = resolve_page_settings(&rules, 1, 4, &config, true);
-        assert!((m1.top - 11.0).abs() < 0.01, "page 1 should be :left in RTL");
+        assert!(
+            (m1.top - 11.0).abs() < 0.01,
+            "page 1 should be :left in RTL"
+        );
         let (_, m2, _) = resolve_page_settings(&rules, 2, 4, &config, true);
-        assert!((m2.top - 22.0).abs() < 0.01, "page 2 should be :right in RTL");
+        assert!(
+            (m2.top - 22.0).abs() < 0.01,
+            "page 2 should be :right in RTL"
+        );
         let (_, m3, _) = resolve_page_settings(&rules, 3, 4, &config, true);
-        assert!((m3.top - 11.0).abs() < 0.01, "page 3 should be :left in RTL");
+        assert!(
+            (m3.top - 11.0).abs() < 0.01,
+            "page 3 should be :left in RTL"
+        );
         let (_, m4, _) = resolve_page_settings(&rules, 4, 4, &config, true);
-        assert!((m4.top - 22.0).abs() < 0.01, "page 4 should be :right in RTL");
+        assert!(
+            (m4.top - 22.0).abs() < 0.01,
+            "page 4 should be :right in RTL"
+        );
     }
 }
