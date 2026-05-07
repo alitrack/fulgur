@@ -191,6 +191,7 @@ pub fn dom_to_drawables(
     convert_node(doc.deref(), root.id, ctx, 0, &mut drawables);
     drawables.bookmark_anchors = extract_bookmark_anchors(doc, &bookmark_snapshot, ctx.assets);
     drawables.body_offset_pt = extract_body_offset_pt(doc);
+    drawables.root_dir_rtl = extract_root_dir_rtl(doc);
     drawables.root_id = Some(root.id);
     drawables.body_id = find_body_id_in_dom(doc);
     record_semantics_pass(doc, &mut drawables);
@@ -242,6 +243,21 @@ fn extract_body_offset_pt(doc: &HtmlDocument) -> (f32, f32) {
         }
     }
     (0.0, 0.0)
+}
+
+/// Return `true` when the root `<html>` element has `direction: rtl`.
+/// Used by `render_v2` to determine which page is the first `:left` page
+/// (CSS Paged Media §5: RTL docs start on a `:left` page, LTR on `:right`).
+fn extract_root_dir_rtl(doc: &HtmlDocument) -> bool {
+    use ::style::properties::longhands::direction::computed_value::T as Dir;
+    let base = doc.deref();
+    let root = doc.root_element();
+    let Some(root_node) = base.get_node(root.id) else {
+        return false;
+    };
+    root_node
+        .primary_styles()
+        .is_some_and(|s| matches!(s.get_inherited_box().clone_direction(), Dir::Rtl))
 }
 
 /// Snapshot the union of `NodeId` keys currently present in `out`'s

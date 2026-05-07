@@ -856,6 +856,25 @@ fn render_v2_smoke_html_body_bg_multi_page() {
 }
 
 #[test]
+fn render_v2_smoke_rtl_page_left_right_selectors() {
+    // Exercises `extract_root_dir_rtl` (direction:rtl on :root) and the
+    // first_page_is_left RTL branch in resolve_page_settings / selector_matches.
+    // Also exercises the Y-origin fix for continuation pages in an RTL doc.
+    let html = r##"<!DOCTYPE html><html><head><style>
+        :root { direction: rtl; }
+        @page :left  { margin: 30pt; }
+        @page :right { margin: 60pt; }
+        .tall { height: 900px; background: #cef; }
+    </style></head><body>
+        <div class="tall"></div>
+        <div class="tall"></div>
+    </body></html>"##;
+    let engine = fulgur::engine::Engine::builder().build();
+    let pdf = engine.render_html(html).expect("v2 render");
+    assert!(!pdf.is_empty());
+}
+
+#[test]
 fn render_v2_smoke_block_with_inline_root_padding() {
     // Exercises `draw_block_with_inner_content` content-inset path —
     // the `padding: 6px` shift fix that landed in PR 6.

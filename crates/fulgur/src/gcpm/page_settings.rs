@@ -16,13 +16,26 @@ fn keyword_to_page_size(name: &str) -> PageSize {
 ///
 /// Supported pseudo-selectors:
 /// - `:first` — matches page 1 only
-/// - `:left`  — matches even page numbers (verso in LTR)
-/// - `:right` — matches odd page numbers (recto in LTR)
-fn selector_matches(selector: &str, page_num: usize) -> bool {
+/// - `:left`  — even pages in LTR, odd pages in RTL (CSS Paged Media §5:
+///   RTL documents start on a `:left` page)
+/// - `:right` — odd pages in LTR, even pages in RTL
+fn selector_matches(selector: &str, page_num: usize, first_page_is_left: bool) -> bool {
     match selector {
         ":first" => page_num == 1,
-        ":left" => page_num % 2 == 0,
-        ":right" => page_num % 2 == 1,
+        ":left" => {
+            if first_page_is_left {
+                page_num % 2 == 1
+            } else {
+                page_num % 2 == 0
+            }
+        }
+        ":right" => {
+            if first_page_is_left {
+                page_num % 2 == 0
+            } else {
+                page_num % 2 == 1
+            }
+        }
         _ => false,
     }
 }
@@ -39,6 +52,7 @@ pub fn resolve_page_settings(
     page_num: usize,
     _total_pages: usize,
     config: &Config,
+    first_page_is_left: bool,
 ) -> (PageSize, Margin, bool) {
     // --- Collect CSS declarations, separating default from selector-matched ---
     let mut default_size: Option<&PageSizeDecl> = None;
@@ -57,7 +71,7 @@ pub fn resolve_page_settings(
                 default_margin.merge(&rule.margin);
             }
             Some(sel) => {
-                if selector_matches(sel, page_num) {
+                if selector_matches(sel, page_num, first_page_is_left) {
                     if rule.size.is_some() {
                         matched_size = rule.size.as_ref();
                     }
@@ -152,7 +166,7 @@ mod tests {
     #[test]
     fn test_no_page_settings_uses_config() {
         let config = Config::default();
-        let (size, margin, landscape) = resolve_page_settings(&[], 1, 10, &config);
+        let (size, margin, landscape) = resolve_page_settings(&[], 1, 10, &config, false);
         assert!((size.width - PageSize::A4.width).abs() < 0.01);
         assert!((margin.top - config.margin.top).abs() < 0.01);
         assert!(!landscape);
@@ -166,7 +180,7 @@ mod tests {
             size: Some(PageSizeDecl::Keyword("letter".into())),
             margin: PartialMargin::default(),
         }];
-        let (size, _, _) = resolve_page_settings(&rules, 1, 10, &config);
+        let (size, _, _) = resolve_page_settings(&rules, 1, 10, &config, false);
         assert!((size.width - PageSize::LETTER.width).abs() < 0.01);
     }
 
@@ -179,7 +193,7 @@ mod tests {
             size: Some(PageSizeDecl::Keyword("letter".into())),
             margin: PartialMargin::default(),
         }];
-        let (size, _, _) = resolve_page_settings(&rules, 1, 10, &config);
+        let (size, _, _) = resolve_page_settings(&rules, 1, 10, &config, false);
         assert!((size.width - PageSize::A3.width).abs() < 0.01);
     }
 
@@ -198,9 +212,9 @@ mod tests {
                 margin: PartialMargin::from_uniform(50.0),
             },
         ];
-        let (_, margin_p1, _) = resolve_page_settings(&rules, 1, 10, &config);
+        let (_, margin_p1, _) = resolve_page_settings(&rules, 1, 10, &config, false);
         assert!((margin_p1.top - 50.0).abs() < 0.01);
-        let (_, margin_p2, _) = resolve_page_settings(&rules, 2, 10, &config);
+        let (_, margin_p2, _) = resolve_page_settings(&rules, 2, 10, &config, false);
         assert!((margin_p2.top - 20.0).abs() < 0.01);
     }
 
@@ -219,9 +233,9 @@ mod tests {
                 margin: PartialMargin::from_sides(20.0, 10.0, 20.0, 30.0),
             },
         ];
-        let (_, m2, _) = resolve_page_settings(&rules, 2, 10, &config);
+        let (_, m2, _) = resolve_page_settings(&rules, 2, 10, &config, false);
         assert!((m2.left - 10.0).abs() < 0.01);
-        let (_, m3, _) = resolve_page_settings(&rules, 3, 10, &config);
+        let (_, m3, _) = resolve_page_settings(&rules, 3, 10, &config, false);
         assert!((m3.left - 30.0).abs() < 0.01);
     }
 
@@ -233,7 +247,7 @@ mod tests {
             size: Some(PageSizeDecl::KeywordWithOrientation("A4".into(), true)),
             margin: PartialMargin::default(),
         }];
-        let (_, _, landscape) = resolve_page_settings(&rules, 1, 10, &config);
+        let (_, _, landscape) = resolve_page_settings(&rules, 1, 10, &config, false);
         assert!(landscape);
     }
 
@@ -245,7 +259,7 @@ mod tests {
             size: Some(PageSizeDecl::Custom(400.0, 600.0)),
             margin: PartialMargin::default(),
         }];
-        let (size, _, landscape) = resolve_page_settings(&rules, 1, 10, &config);
+        let (size, _, landscape) = resolve_page_settings(&rules, 1, 10, &config, false);
         assert!((size.width - 400.0).abs() < 0.01);
         assert!((size.height - 600.0).abs() < 0.01);
         assert!(!landscape);
@@ -273,7 +287,7 @@ mod tests {
                 },
             },
         ];
-        let (_, m, _) = resolve_page_settings(&rules, 1, 10, &config);
+        let (_, m, _) = resolve_page_settings(&rules, 1, 10, &config, false);
         assert!((m.top - 150.0).abs() < 0.01);
         assert!((m.right - 375.0).abs() < 0.01);
         assert!((m.bottom - 0.0).abs() < 0.01);
@@ -293,10 +307,49 @@ mod tests {
                 left: None,
             },
         }];
-        let (_, m, _) = resolve_page_settings(&rules, 1, 10, &config);
+        let (_, m, _) = resolve_page_settings(&rules, 1, 10, &config, false);
         assert!((m.top - 100.0).abs() < 0.01);
         assert!((m.right - config.margin.right).abs() < 0.01);
         assert!((m.bottom - config.margin.bottom).abs() < 0.01);
         assert!((m.left - config.margin.left).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_left_right_selectors_rtl() {
+        // In RTL documents the first page is :left (first_page_is_left = true).
+        // Odd pages → :left, even pages → :right.
+        let config = Config::default();
+        let rules = vec![
+            PageSettingsRule {
+                page_selector: Some(":left".into()),
+                size: None,
+                margin: PartialMargin::from_uniform(11.0),
+            },
+            PageSettingsRule {
+                page_selector: Some(":right".into()),
+                size: None,
+                margin: PartialMargin::from_uniform(22.0),
+            },
+        ];
+        let (_, m1, _) = resolve_page_settings(&rules, 1, 4, &config, true);
+        assert!(
+            (m1.top - 11.0).abs() < 0.01,
+            "page 1 should be :left in RTL"
+        );
+        let (_, m2, _) = resolve_page_settings(&rules, 2, 4, &config, true);
+        assert!(
+            (m2.top - 22.0).abs() < 0.01,
+            "page 2 should be :right in RTL"
+        );
+        let (_, m3, _) = resolve_page_settings(&rules, 3, 4, &config, true);
+        assert!(
+            (m3.top - 11.0).abs() < 0.01,
+            "page 3 should be :left in RTL"
+        );
+        let (_, m4, _) = resolve_page_settings(&rules, 4, 4, &config, true);
+        assert!(
+            (m4.top - 22.0).abs() < 0.01,
+            "page 4 should be :right in RTL"
+        );
     }
 }

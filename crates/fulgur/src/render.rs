@@ -105,15 +105,19 @@ pub fn render_v2(
                     page_num,
                     page_count,
                     config,
+                    drawables.root_dir_rtl,
                 );
             // `frag.x` is html-relative (already includes body's x
             // offset from the fragmenter); only y needs `body_offset_pt`
-            // applied because fragments are body-content-area-relative
-            // along the y axis.
+            // applied, and only on page 0 (continuation pages are already
+            // page-content-area-relative after the fragmenter resets cursor_y).
+            let body_y_off = if page_idx == 0 {
+                drawables.body_offset_pt.1
+            } else {
+                0.0
+            };
             let x_pt = resolved_margin.left + crate::convert::px_to_pt(first_frag.x);
-            let y_pt = resolved_margin.top
-                + drawables.body_offset_pt.1
-                + crate::convert::px_to_pt(first_frag.y);
+            let y_pt = resolved_margin.top + body_y_off + crate::convert::px_to_pt(first_frag.y);
             dest_registry.record(id.as_str(), x_pt, y_pt);
         }
     }
@@ -185,6 +189,7 @@ pub fn render_v2(
                 page_num,
                 page_count,
                 config,
+                drawables.root_dir_rtl,
             );
         let page_size = if resolved_landscape {
             resolved_size.landscape()
@@ -229,33 +234,57 @@ pub fn render_v2(
                         root_block,
                         resolved_margin.left,
                         resolved_margin.top,
+                        None,
                     );
                 }
-                // body's bg pre-pass runs on continuation pages only.
-                // Page 0 already paints body via the main dispatch loop
-                // (the fragmenter records body's fragment on page 0, with
-                // `layout_size` covering body's full height — clipped to
-                // page area at PDF render time, mirroring v1 exactly).
-                // Without this guard, page 0 would double-paint body's bg.
-                if page_idx > 0
-                    && let Some(body_id) = drawables.body_id
+                // Body bg pre-pass: runs on ALL pages. body's
+                // `layout_size.height` is the full document height (page-0
+                // layout), which overshoots the content area whenever
+                // margin-bottom > 0. Painting here with `content_area_h`
+                // prevents that overshoot on every page (fulgur-ossm).
+                //
+                // Continuation pages (page_idx > 0) have no body fragment in
+                // the geometry table (fragmenter only records body on page 0),
+                // so the pre-pass is their sole source of body background.
+                //
+                // Page 0: body HAS a geometry fragment, so the main dispatch
+                // also visits it. `draw_v2_page` therefore skips body's block
+                // bg for body_id (only rendering inline content) to avoid
+                // double-painting (see the body_id check in `draw_v2_page`).
+                if let Some(body_id) = drawables.body_id
                     && let Some(body_block) = drawables.block_styles.get(&body_id)
                 {
+                    let content_area_h =
+                        page_size.height - resolved_margin.top - resolved_margin.bottom;
+                    let body_bg_y = if page_idx == 0 {
+                        resolved_margin.top + drawables.body_offset_pt.1
+                    } else {
+                        resolved_margin.top
+                    };
                     paint_root_block_v2(
                         &mut canvas,
                         body_block,
                         resolved_margin.left + drawables.body_offset_pt.0,
-                        resolved_margin.top + drawables.body_offset_pt.1,
+                        body_bg_y,
+                        Some(content_area_h),
                     );
                 }
                 // `frag.x` is html-relative (fragmenter folds body's x
-                // offset in); `frag.y` is body-content-area-relative — so
-                // only y receives `body_offset_pt`.
+                // offset in); `frag.y` is body-content-area-relative.
+                // On page 0 body_offset_pt.1 translates body-content-area
+                // to html-content-area; on continuation pages the fragmenter
+                // resets cursor_y=0 per page so fragments are already
+                // page-content-area-relative and the offset must not apply.
+                let body_top_pt = if page_idx == 0 {
+                    resolved_margin.top + drawables.body_offset_pt.1
+                } else {
+                    resolved_margin.top
+                };
                 draw_v2_page(
                     &mut canvas,
                     page_idx as u32,
                     resolved_margin.left,
-                    resolved_margin.top + drawables.body_offset_pt.1,
+                    body_top_pt,
                     geometry,
                     drawables,
                     &transformed_descendants,
@@ -482,12 +511,53 @@ fn draw_v2_page(
         }
         // Skip the html root: its bg / border / shadow are painted
         // per-page in the pre-pass (`paint_root_block_v2`) above.
-        // Body intentionally is NOT skipped here — page 0 needs the
-        // main dispatch to paint body normally (so inline-root
-        // children at body's node_id keep flowing through
-        // `draw_block_with_inner_content`); page 1+ relies on the
-        // body branch of the pre-pass.
         if Some(node_id) == drawables.root_id {
+            continue;
+        }
+
+        // Body block bg is painted by the per-page pre-pass (with
+        // content_area_h clamping) so we must not paint it again here.
+        // When body has a BlockEntry, skip the block-bg path and
+        // dispatch only the inline content (paragraph / image / svg) so
+        // that replaced content and text lines still render on page 0.
+        // When body has NO BlockEntry there is nothing to double-paint,
+        // so fall through to the normal dispatch path below.
+        if Some(node_id) == drawables.body_id && drawables.block_styles.contains_key(&node_id) {
+            for frag in &geom.fragments {
+                if frag.page_index != page_index {
+                    continue;
+                }
+                let x_pt = margin_left_pt + px_to_pt(frag.x);
+                let y_pt = margin_top_pt + px_to_pt(frag.y);
+                let block = drawables.block_styles.get(&node_id).unwrap();
+                let (ix, iy) = block.style.content_inset();
+                let inner_x = x_pt + ix;
+                let inner_y = y_pt + iy;
+                let is_split = geom.is_split();
+                crate::draw_primitives::draw_with_opacity(canvas, block.opacity, |canvas| {
+                    if let Some(p) = drawables.paragraphs.get(&node_id) {
+                        draw_paragraph_inner_paint(
+                            canvas,
+                            p,
+                            inner_x,
+                            inner_y,
+                            &geom.fragments,
+                            page_index,
+                            is_split,
+                            drawables,
+                            geometry,
+                            margin_left_pt,
+                            margin_top_pt,
+                        );
+                    }
+                    if let Some(img) = drawables.images.get(&node_id) {
+                        draw_image_inner_paint(canvas, img, inner_x, inner_y);
+                    }
+                    if let Some(svg) = drawables.svgs.get(&node_id) {
+                        draw_svg_inner_paint(canvas, svg, inner_x, inner_y);
+                    }
+                });
+            }
             continue;
         }
 
@@ -2507,11 +2577,14 @@ fn paint_root_block_v2(
     entry: &crate::drawables::BlockEntry,
     margin_left_pt: f32,
     margin_top_pt: f32,
+    height_override: Option<f32>,
 ) {
     use crate::draw_primitives::draw_with_opacity;
     let Some(size) = entry.layout_size else {
         return;
     };
+
+    let h = height_override.unwrap_or(size.height);
 
     draw_with_opacity(canvas, entry.opacity, |canvas| {
         if entry.visible {
@@ -2521,7 +2594,7 @@ fn paint_root_block_v2(
                 margin_left_pt,
                 margin_top_pt,
                 size.width,
-                size.height,
+                h,
             );
             crate::background::draw_background(
                 canvas,
@@ -2529,7 +2602,7 @@ fn paint_root_block_v2(
                 margin_left_pt,
                 margin_top_pt,
                 size.width,
-                size.height,
+                h,
             );
             crate::draw_primitives::draw_block_border(
                 canvas,
@@ -2537,7 +2610,7 @@ fn paint_root_block_v2(
                 margin_left_pt,
                 margin_top_pt,
                 size.width,
-                size.height,
+                h,
             );
         }
     });
@@ -3681,7 +3754,7 @@ impl<'a> MarginBoxRenderer<'a> {
             if let Some((drawables, geometry)) = self.render_cache.get(&cache_key) {
                 if let Some(root_id) = drawables.root_id {
                     if let Some(root_block) = drawables.block_styles.get(&root_id) {
-                        paint_root_block_v2(canvas, root_block, rect.x, rect.y);
+                        paint_root_block_v2(canvas, root_block, rect.x, rect.y, None);
                     }
                 }
                 // `body_offset_pt` is (0, 0) here because the wrapper HTML fixes

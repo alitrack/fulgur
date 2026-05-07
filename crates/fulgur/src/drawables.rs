@@ -307,6 +307,10 @@ pub struct Drawables {
     /// in geometry but absolute on Drawables avoids touching the
     /// fragmenter contract.
     pub body_offset_pt: (f32, f32),
+    /// `true` when the root element (`<html>`) has `direction: rtl`.
+    /// CSS Paged Media §5 specifies that when the root element is RTL
+    /// the first page is a `:left` page instead of `:right`.
+    pub root_dir_rtl: bool,
     /// NodeId of the `<html>` root element when present.
     ///
     /// v1 painted html's own `background` BEFORE recursing into body.
@@ -380,6 +384,7 @@ impl Default for Drawables {
     fn default() -> Self {
         Self {
             body_offset_pt: (0.0, 0.0),
+            root_dir_rtl: false,
             root_id: None,
             body_id: None,
             block_styles: BTreeMap::new(),
