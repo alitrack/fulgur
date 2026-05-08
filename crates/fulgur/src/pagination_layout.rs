@@ -3902,7 +3902,7 @@ h2 { string-set: chapter-title content(text); }
             doc.deref_mut(),
             3,
             600.0,
-            971.338867,
+            971.338_87,
             None,
         );
 
