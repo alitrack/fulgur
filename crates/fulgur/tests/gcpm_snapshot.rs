@@ -100,6 +100,71 @@ fn gcpm_running_element_via_inline_style_snapshot() {
 }
 
 #[test]
+fn gcpm_element_policy_first_snapshot() {
+    let html = r#"<!doctype html><html><head>
+        <style>
+            .title { position: running(title); }
+            @page {
+                size: 400pt 300pt;
+                margin: 40pt;
+                @top-center { content: "first: " element(title, first); font-size: 9px; }
+            }
+            .spacer { height: 220pt; }
+        </style>
+    </head><body>
+        <h1 class="title">First Snapshot One</h1>
+        <div class="spacer"></div>
+        <div style="page-break-before: always"></div>
+        <h1 class="title">First Snapshot Two</h1>
+        <div class="spacer"></div>
+        <div style="page-break-before: always"></div>
+        <h1 class="title">First Snapshot Three</h1>
+        <div class="spacer"></div>
+    </body></html>"#;
+
+    let pdf = Engine::builder()
+        .assets(noto_assets())
+        .serialize_settings(snapshot_settings())
+        .build()
+        .render_html(html)
+        .expect("render");
+
+    check_snapshot("gcpm_element_policy_first", &pdf);
+}
+
+#[test]
+fn gcpm_element_policy_last_snapshot() {
+    let html = r#"<!doctype html><html><head>
+        <style>
+            .title { position: running(title); }
+            @page {
+                size: 400pt 300pt;
+                margin: 40pt;
+                @top-center { content: "last: " element(title, last); font-size: 9px; }
+            }
+            .spacer { height: 220pt; }
+        </style>
+    </head><body>
+        <h1 class="title">Last Snapshot Start</h1>
+        <div class="spacer"></div>
+        <h1 class="title">Last Snapshot Override</h1>
+        <div class="spacer"></div>
+        <div style="page-break-before: always"></div>
+        <h1 class="title">Last Snapshot Two</h1>
+        <div class="spacer"></div>
+    </body></html>"#;
+
+    let pdf = Engine::builder()
+        .assets(noto_assets())
+        .serialize_settings(snapshot_settings())
+        .build()
+        .render_html(html)
+        .expect("render");
+
+    check_snapshot("gcpm_element_policy_last", &pdf);
+}
+
+#[test]
 fn gcpm_string_set_via_inline_style_snapshot() {
     let html = r#"<!doctype html><html><head>
         <style>

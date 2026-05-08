@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+@page {
+  size: 400pt 300pt;
+  margin: 40pt;
+  @top-center { content: "start: " element(title, start); font-size: 9pt; color: #555; }
+}
+body { font-family: sans-serif; font-size: 11pt; line-height: 1.6; margin: 0; }
+.title { position: running(title); border-bottom: 1pt solid #999; padding-bottom: 4pt; }
+.spacer { height: 220pt; margin: 8pt 0; border: 1pt solid #ddd; background: #f9f9f9; }
+</style>
+</head>
+<body>
+<div class="title">Start Policy Seed</div>
+<div class="spacer">Page one defines the initial running value.</div>
+
+<div style="page-break-before: always"></div>
+<p style="margin-top: 0">Page two keeps no running title so it should keep the seed from page one.</p>
+<div class="spacer">No running element is defined on this page.</div>
+
+<div style="page-break-before: always"></div>
+<div class="title">Start Policy New</div>
+<div class="spacer">Page three adds a new running value; start should still show page-two value.</div>
+</body>
+</html>
