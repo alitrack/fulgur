@@ -4473,17 +4473,17 @@ mod tests {
         }
     }
 
-    fn make_line(height_pt: f32) -> crate::paragraph::ShapedLine {
+    fn make_line(height_pt: f32, baseline_pt: f32) -> crate::paragraph::ShapedLine {
         crate::paragraph::ShapedLine {
             height: height_pt,
-            baseline: height_pt * 0.75,
+            baseline: baseline_pt,
             items: vec![],
         }
     }
 
     #[test]
     fn paragraph_lines_for_page_no_matching_fragment_returns_none() {
-        let lines = vec![make_line(16.0)];
+        let lines = vec![make_line(16.0, 12.0)];
         let fragments = vec![make_fragment(0, 16.0)];
         // Ask for page 1, which has no fragment.
         let result = paragraph_lines_for_page(&lines, &fragments, 1, false);
@@ -4492,21 +4492,30 @@ mod tests {
 
     #[test]
     fn paragraph_lines_for_page_not_split_returns_all_lines() {
-        let lines = vec![make_line(16.0), make_line(16.0), make_line(16.0)];
-        let fragments = vec![make_fragment(0, 48.0)];
-        // px_to_pt conversion: fragment height in px, lines in pt.
-        // paragraph_lines_for_page works with pt throughout since ShapedLine.height is in pt
-        // and Fragment.height is in px (converted by px_to_pt inside the function).
+        // px_to_pt(64px) ≈ 48pt (3 × 16pt lines). Non-split path returns
+        // all lines unchanged — baseline values are preserved as-is.
+        let lines = vec![
+            make_line(16.0, 12.0),
+            make_line(16.0, 28.0),
+            make_line(16.0, 44.0),
+        ];
+        let fragments = vec![make_fragment(0, 64.0)];
         let result = paragraph_lines_for_page(&lines, &fragments, 0, false);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().len(), 3);
+        let sliced = result.unwrap();
+        assert_eq!(sliced.len(), 3);
+        assert!(
+            (sliced[0].baseline - 12.0).abs() < 0.01,
+            "baseline unchanged on non-split"
+        );
     }
 
     #[test]
     fn paragraph_lines_for_page_split_first_page_returns_first_lines() {
         // Lines are 12pt each. Fragment heights are in CSS px;
         // px_to_pt(16px) = 12pt (PX_TO_PT = 0.75), so 16px per line.
-        let lines = vec![make_line(12.0), make_line(12.0)];
+        // Page 0: consumed = 0, baseline unchanged.
+        let lines = vec![make_line(12.0, 9.0), make_line(12.0, 21.0)];
         let fragments = vec![
             make_fragment(0, 16.0), // 16px = 12pt → first line
             make_fragment(1, 16.0),
@@ -4515,11 +4524,17 @@ mod tests {
         assert!(result.is_some());
         let sliced = result.unwrap();
         assert_eq!(sliced.len(), 1, "page 0 should contain exactly one line");
+        assert!(
+            (sliced[0].baseline - 9.0).abs() < 0.01,
+            "page 0 baseline unchanged (consumed=0)"
+        );
     }
 
     #[test]
     fn paragraph_lines_for_page_split_second_page_returns_remaining_lines() {
-        let lines = vec![make_line(12.0), make_line(12.0)];
+        // Page 1: consumed = 12pt (one line). The function subtracts consumed
+        // from baseline, so paragraph-absolute 21pt → fragment-local 9pt.
+        let lines = vec![make_line(12.0, 9.0), make_line(12.0, 21.0)];
         let fragments = vec![
             make_fragment(0, 16.0), // 16px = 12pt → first line
             make_fragment(1, 16.0),
@@ -4528,12 +4543,16 @@ mod tests {
         assert!(result.is_some());
         let sliced = result.unwrap();
         assert_eq!(sliced.len(), 1, "page 1 should contain exactly one line");
+        assert!(
+            (sliced[0].baseline - 9.0).abs() < 0.01,
+            "baseline rebased: 21pt - 12pt consumed = 9pt"
+        );
     }
 
     #[test]
     fn paragraph_lines_for_page_split_empty_range_returns_none() {
         // Fragment height is 0px → no lines fit.
-        let lines = vec![make_line(12.0)];
+        let lines = vec![make_line(12.0, 9.0)];
         let fragments = vec![
             make_fragment(0, 100.0), // page 0 gets the line
             make_fragment(1, 0.0),   // page 1 has zero height
@@ -4545,8 +4564,10 @@ mod tests {
     // --- build_page_skip_sets ---
 
     fn block_entry_with_overflow_clip(descendants: Vec<usize>) -> crate::drawables::BlockEntry {
-        let mut style = crate::draw_primitives::BlockStyle::default();
-        style.overflow_x = crate::draw_primitives::Overflow::Clip;
+        let style = crate::draw_primitives::BlockStyle {
+            overflow_x: crate::draw_primitives::Overflow::Clip,
+            ..Default::default()
+        };
         crate::drawables::BlockEntry {
             style,
             opacity: 1.0,
@@ -4652,8 +4673,10 @@ mod tests {
     #[test]
     fn build_page_skip_sets_table_overflow_clip_collects_descendants() {
         let mut d = Drawables::new();
-        let mut style = crate::draw_primitives::BlockStyle::default();
-        style.overflow_x = crate::draw_primitives::Overflow::Clip;
+        let style = crate::draw_primitives::BlockStyle {
+            overflow_x: crate::draw_primitives::Overflow::Clip,
+            ..Default::default()
+        };
         d.tables.insert(
             40,
             crate::drawables::TableEntry {
