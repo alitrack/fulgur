@@ -695,14 +695,20 @@ impl<'a> PaginationLayoutTree<'a> {
             // child whenever there is in-flow content already placed on
             // the current page. A leading break-before on a fresh page
             // is a no-op (CSS 3 Fragmentation §3 collapses it).
-            if (matches!(
+            let explicit_break_before = matches!(
                 break_props.break_before,
                 Some(crate::draw_primitives::BreakBefore::Page)
-            ) || page_name_changed)
-                && cursor_y > 0.0
-            {
+            );
+            let page_filling_break_child = gap > 0.0
+                && child_h >= self.page_height_px * 0.9
+                && gap + child_h <= self.page_height_px + 0.5;
+            if (explicit_break_before || page_name_changed) && emitted > 0 && cursor_y > 0.0 {
                 page_index += 1;
-                cursor_y = 0.0;
+                cursor_y = if explicit_break_before && page_filling_break_child {
+                    gap
+                } else {
+                    0.0
+                };
             }
 
             let avoid_inside = matches!(
@@ -4866,6 +4872,34 @@ h2 { string-set: chapter-title content(text); }
                 f.y,
             );
         }
+    }
+
+    #[test]
+    fn body_level_break_before_preserves_own_top_margin_on_new_page() {
+        let html = r#"
+            <html><body style="margin: 0; padding: 0">
+              <div style="height: 40px; margin: 0"></div>
+              <div style="height: 90px; margin-top: 10px; break-before: page"></div>
+            </body></html>
+        "#;
+        let mut doc = parse(html, 600.0);
+        let table = blitz_adapter::extract_column_style_table(&doc);
+        let geom = super::run_pass_with_break_styles(doc.deref_mut(), 100.0, &table);
+
+        let second_on_page1: Vec<&Fragment> = geom
+            .values()
+            .flat_map(|g| g.fragments.iter())
+            .filter(|f| f.page_index == 1 && (f.height - 90.0).abs() < 0.5)
+            .collect();
+        assert_eq!(
+            second_on_page1.len(),
+            1,
+            "expected only the second child on page 1, geom={geom:?}"
+        );
+        assert!(
+            (second_on_page1[0].y - 10.0).abs() < 0.5,
+            "body-level break-before should keep the element's own top margin on the new page; geom={geom:?}"
+        );
     }
 
     #[test]
