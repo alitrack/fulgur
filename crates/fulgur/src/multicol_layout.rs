@@ -1091,15 +1091,16 @@ fn layout_column_group(
     let mut virt_col_y: f32 = 0.0;
     for (id, size) in &measured {
         let id_u: usize = (*id).into();
-        // Borrow the post-measure parley layout for this child if it is an
-        // inline root *and* its measured height exceeds the per-column
-        // budget (otherwise an atomic placement is cheaper and preserves
-        // the byte-identical output the existing tests assert on).
+        // Borrow the post-measure parley layout only for plain paragraph
+        // children. The Case B materialiser reconstructs glyph runs, not
+        // arbitrary block boxes, so generic inline-root blocks must remain
+        // atomic to preserve padding/overflow/outline/background semantics.
         let inline_root_layout = tree
             .doc
             .get_node(id_u)
             .filter(|n| n.flags.is_inline_root())
             .and_then(|n| n.element_data())
+            .filter(|e| e.name.local.as_ref() == "p")
             .and_then(|e| e.inline_layout_data.as_ref())
             .map(|tl| &tl.layout);
 
@@ -3015,6 +3016,37 @@ mod tests {
         assert_eq!(split.column_slices.len(), 2);
         assert!(!split.column_slices[0].line_range.is_empty());
         assert!(!split.column_slices[1].line_range.is_empty());
+    }
+
+    #[test]
+    fn multicol_does_not_slice_generic_inline_root_block_child() {
+        // Case B paragraph slicing materialises only glyph runs. Generic
+        // block inline roots may carry box semantics such as overflow,
+        // padding, outlines, and backgrounds; slicing them as text would
+        // bypass the normal block draw path and lose those box effects.
+        let html = r#"<!doctype html><html><body>
+            <div id="mc" style="columns: 2;">
+              <div>Column1</div>
+              <div style="overflow: hidden; padding: 2px">Column2<br>Column2 line2</div>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let mc_id = collect_multicol_node_ids(&doc)[0];
+        let column_styles = crate::column_css::ColumnStyleTable::new();
+        let geometry_table = run_pass(&mut doc, &column_styles);
+        let mc_geom = geometry_table
+            .get(&mc_id)
+            .expect("multicol container should have a geometry entry");
+        assert_eq!(mc_geom.groups.len(), 1);
+        let group = &mc_geom.groups[0];
+
+        assert!(
+            group.paragraph_splits.is_empty(),
+            "generic block children must stay on the atomic block path, got {:?}",
+            group.paragraph_splits,
+        );
     }
 
     /// fulgur-6q5 Fix 3: when an inline-root paragraph follows an atomic

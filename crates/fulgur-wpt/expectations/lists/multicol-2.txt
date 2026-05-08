@@ -142,7 +142,7 @@ SKIP  css/css-multicol/multicol-gap-animation-003.html  # NoMatch
 FAIL  css/css-multicol/multicol-gap-fraction-002.html  # page 1 diff: 4830/891662 pixels exceed tol (max_ch=255)
 SKIP  css/css-multicol/multicol-gap-percentage-001.html  # NoMatch
 FAIL  css/css-multicol/multicol-list-item-002.html  # page 1 diff: 9531/891662 pixels exceed tol (max_ch=255)
-PASS  css/css-multicol/multicol-list-item-003.html
+FAIL  css/css-multicol/multicol-list-item-003.html  # fulgur-tfwz: page 1 diff: 1374/891662 pixels exceed tol (max_ch=255)
 FAIL  css/css-multicol/multicol-list-item-004.html  # page 1 diff: 1374/891662 pixels exceed tol (max_ch=255)
 FAIL  css/css-multicol/multicol-list-item-005.html  # page 1 diff: 1386/891662 pixels exceed tol (max_ch=255)
 PASS  css/css-multicol/multicol-list-item-006.html
@@ -192,6 +192,6 @@ FAIL  css/css-multicol/multicol-rule-nested-balancing-001.html  # page 1 diff: 9
 FAIL  css/css-multicol/multicol-rule-nested-balancing-002.html  # page 1 diff: 446/891662 pixels exceed tol (max_ch=255)
 FAIL  css/css-multicol/multicol-rule-nested-balancing-003.html  # page 1 diff: 74535/891662 pixels exceed tol (max_ch=255)
 FAIL  css/css-multicol/multicol-rule-nested-balancing-004.html  # page 1 diff: 20703/891662 pixels exceed tol (max_ch=129)
-FAIL  css/css-multicol/multicol-scroll-content.html  # page 1 diff: 10302/891662 pixels exceed tol (max_ch=255)
+PASS  css/css-multicol/multicol-scroll-content.html
 PASS  css/css-multicol/multicol-span-all-004.html
 PASS  css/css-multicol/multicol-span-all-005.html
