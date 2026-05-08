@@ -2756,6 +2756,11 @@ pub fn append_position_absolute_body_direct_fragments(
         let (resolved_x, resolved_y) =
             resolve_viewport_cb_location(child, w, h, viewport_w_px, viewport_h_px)
                 .unwrap_or((layout.location.x, layout.location.y));
+        let page_stride_px = if uses_bottom_without_top(child) {
+            viewport_h_px.round()
+        } else {
+            viewport_h_px
+        };
 
         // Walk the subtree and emit fragments for every page each
         // in-flow node intersects (block, paragraph, anonymous wrapper).
@@ -2775,6 +2780,7 @@ pub fn append_position_absolute_body_direct_fragments(
             (resolved_x, resolved_y),
             body_offset_xy,
             viewport_h_px,
+            page_stride_px,
             pages,
             !body_has_in_flow_content,
         );
@@ -2800,6 +2806,7 @@ fn record_subtree_fragments_at_offset(
     root_xy_for_paging: (f32, f32),
     body_offset: (f32, f32),
     page_h_px: f32,
+    page_stride_px: f32,
     total_pages: u32,
     may_extend_pages: bool,
 ) {
@@ -2812,6 +2819,7 @@ fn record_subtree_fragments_at_offset(
         root_xy_for_paging: (f32, f32),
         body_offset: (f32, f32),
         page_h_px: f32,
+        page_stride_px: f32,
         total_pages: u32,
         may_extend_pages: bool,
         depth: usize,
@@ -2909,7 +2917,7 @@ fn record_subtree_fragments_at_offset(
                     let stored_y = if is_monolithic_continuation {
                         -body_offset.1
                     } else {
-                        final_y_for_paging - (page_index as f32) * page_h_px - body_offset.1
+                        final_y_for_paging - (page_index as f32) * page_stride_px - body_offset.1
                     };
                     let stored_h = if is_monolithic_continuation {
                         let consumed = (page_index - first_page) as f32 * page_h_px;
@@ -2958,6 +2966,7 @@ fn record_subtree_fragments_at_offset(
                 root_xy_for_paging,
                 body_offset,
                 page_h_px,
+                page_stride_px,
                 descendant_total_pages,
                 may_extend_pages,
                 depth + 1,
@@ -2976,6 +2985,7 @@ fn record_subtree_fragments_at_offset(
         root_xy_for_paging,
         body_offset,
         page_h_px,
+        page_stride_px,
         total_pages,
         may_extend_pages,
         0,
@@ -3073,6 +3083,20 @@ fn resolve_viewport_cb_location(
         node.final_layout.location.y
     };
     Some((x, y))
+}
+
+fn uses_bottom_without_top(node: &blitz_dom::Node) -> bool {
+    use ::style::values::generics::position::GenericInset;
+
+    fn is_length_percentage(inset: &::style::values::computed::position::Inset) -> bool {
+        matches!(inset, GenericInset::LengthPercentage(_))
+    }
+
+    let Some(styles) = node.primary_styles() else {
+        return false;
+    };
+    let pos = styles.get_position();
+    !is_length_percentage(&pos.top) && is_length_percentage(&pos.bottom)
 }
 
 /// Recursive walker that collects every node id whose computed
@@ -3864,6 +3888,36 @@ h2 { string-set: chapter-title content(text); }
         );
     }
 
+    #[test]
+    fn position_absolute_body_direct_bottom_viewport_page_stride_keeps_page_local_y_stable() {
+        let html = r#"
+            <html><body style="margin:0">
+              <div style="position: absolute; bottom: -971px; height: 19px">x</div>
+            </body></html>
+        "#;
+        let mut doc = parse(html, 600.0);
+        let mut geom = PaginationGeometryTable::new();
+        super::append_position_absolute_body_direct_fragments(
+            &mut geom,
+            doc.deref_mut(),
+            3,
+            600.0,
+            971.338_87,
+            None,
+        );
+
+        let frag = geom
+            .values()
+            .flat_map(|g| &g.fragments)
+            .find(|f| f.page_index == 1 && (f.height - 19.0).abs() < 0.5)
+            .expect("absolute bottom:-viewport fragment should land on page 1");
+        assert!(
+            (frag.y - 952.0).abs() < 0.01,
+            "absolute ref fragment should keep the same page-local bottom anchor as fixed; got {}",
+            frag.y
+        );
+    }
+
     /// fulgur-a8m5: body's collapsed-margin offset (e.g. an in-flow
     /// child with `margin-top:4em`) appears in
     /// `drawables.body_offset_pt`, which the v2 dispatch path adds to
@@ -4226,6 +4280,7 @@ h2 { string-set: chapter-title content(text); }
             abs_id,
             (0.0, f32::MAX),
             (0.0, 0.0),
+            f32::MAX,
             f32::MAX,
             3,
             true,
