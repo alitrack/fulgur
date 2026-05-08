@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.15.0] - 2026-05-08
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+### Features
+* feat(gcpm): support CSS counters() with spec-compliant scope tracking (fulgur-vsv) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/393
+* feat(gcpm): GCPM target-counter() / target-counters() / target-text() 対応 by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/395
+* feat(gcpm): wire implicit-href for margin-box target-* by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/396
+* feat(gcpm): support literal target URLs by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/399
+* feat(gcpm): support target-text fragments by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/397
+### Bug Fixes
+* fix(fixpos): align fixed bottom rounding with Taffy by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/400
+* fix(render): correct Y-origin for continuation pages in @page :left/:right by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/398
+### Other Changes
+* Resolve target-* content() attributes via arbitrary attr(name) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/402
+
+
+**Full Changelog**: https://github.com/fulgur-rs/fulgur/compare/v0.14.0...v0.15.0
+
 ## [0.14.0] - 2026-05-06
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
