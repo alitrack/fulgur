@@ -4910,18 +4910,16 @@ mod tests {
         let mut tree = TagTree::new();
         build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
         assert_eq!(tree.children.len(), 1, "only parent_id at root level");
-        let Node::Group(ref parent_group) = tree.children[0] else {
-            panic!("expected Group at root");
-        };
-        // parent_group: Leaf(parent_tc_id) + Group(child)
-        assert_eq!(
-            parent_group.children.len(),
-            2,
-            "parent has Leaf + nested child Group"
-        );
+        // parent group: Leaf(parent_tc_id) + Group(child). Use a matches! guard
+        // to inspect the inner structure without a let-else panic arm that would
+        // be unreachable in a passing test and flagged by coverage tools.
         assert!(
-            matches!(parent_group.children[1], Node::Group(_)),
-            "second child of parent should be a nested Group"
+            matches!(
+                &tree.children[0],
+                Node::Group(g)
+                    if g.children.len() == 2 && matches!(g.children[1], Node::Group(_))
+            ),
+            "root Group should contain Leaf + nested child Group"
         );
     }
 }
