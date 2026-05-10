@@ -4694,4 +4694,234 @@ mod tests {
         assert!(clip.contains(&41));
         assert!(clip.contains(&42));
     }
+
+    #[test]
+    fn build_page_skip_sets_root_excluded_from_clip_descendants() {
+        let mut d = Drawables::new();
+        let root_id: usize = 2;
+        d.root_id = Some(root_id);
+        d.block_styles
+            .insert(root_id, block_entry_with_overflow_clip(vec![3, 4]));
+        let (_, clip, _) = build_page_skip_sets(&d);
+        assert!(!clip.contains(&3), "root clip descendants must be excluded");
+        assert!(!clip.contains(&4));
+    }
+
+    #[test]
+    fn build_page_skip_sets_root_excluded_from_opacity_descendants() {
+        let mut d = Drawables::new();
+        let root_id: usize = 7;
+        d.root_id = Some(root_id);
+        d.block_styles
+            .insert(root_id, block_entry_with_opacity_descendants(vec![8, 9]));
+        let (_, _, opacity) = build_page_skip_sets(&d);
+        assert!(
+            !opacity.contains(&8),
+            "root opacity descendants must be excluded"
+        );
+        assert!(!opacity.contains(&9));
+    }
+
+    // --- table_box_size ---
+
+    fn make_table_entry_for_size(
+        layout_size: Option<crate::draw_primitives::Size>,
+        width: f32,
+        cached_height: f32,
+    ) -> crate::drawables::TableEntry {
+        crate::drawables::TableEntry {
+            style: crate::draw_primitives::BlockStyle::default(),
+            opacity: 1.0,
+            visible: true,
+            id: None,
+            layout_size,
+            width,
+            cached_height,
+            clip_descendants: vec![],
+        }
+    }
+
+    fn make_frag_with_height(height: f32) -> crate::pagination_layout::Fragment {
+        crate::pagination_layout::Fragment {
+            page_index: 0,
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height,
+        }
+    }
+
+    #[test]
+    fn table_box_size_with_layout_size_uses_layout_dimensions() {
+        // When layout_size is Some, both width and height come from it,
+        // ignoring entry.width, entry.cached_height, and frag.height.
+        let sz = crate::draw_primitives::Size {
+            width: 120.0,
+            height: 80.0,
+        };
+        let entry = make_table_entry_for_size(Some(sz), 200.0, 50.0);
+        let frag = make_frag_with_height(99.0);
+        let (w, h) = table_box_size(&entry, &frag);
+        assert!((w - 120.0).abs() < 0.001, "width from layout_size");
+        assert!((h - 80.0).abs() < 0.001, "height from layout_size");
+    }
+
+    #[test]
+    fn table_box_size_no_layout_size_nonzero_frag_uses_px_to_pt_height() {
+        // frag.height = 40 CSS px → px_to_pt(40) = 30 PDF pt (factor 0.75)
+        let entry = make_table_entry_for_size(None, 150.0, 99.0);
+        let frag = make_frag_with_height(40.0);
+        let (w, h) = table_box_size(&entry, &frag);
+        assert!((w - 150.0).abs() < 0.001, "width falls back to entry.width");
+        assert!((h - 30.0).abs() < 0.01, "height = px_to_pt(frag.height)");
+    }
+
+    #[test]
+    fn table_box_size_no_layout_size_zero_frag_falls_back_to_cached_height() {
+        // When frag.height is 0, px_to_pt(0) = 0.0 which fails the `> 0.0`
+        // guard, so cached_height is used instead.
+        let entry = make_table_entry_for_size(None, 150.0, 55.0);
+        let frag = make_frag_with_height(0.0);
+        let (w, h) = table_box_size(&entry, &frag);
+        assert!((w - 150.0).abs() < 0.001, "width falls back to entry.width");
+        assert!(
+            (h - 55.0).abs() < 0.001,
+            "height falls back to cached_height when frag.height is zero"
+        );
+    }
+
+    // --- build_struct_tree ---
+
+    fn make_p_semantic_entry(parent: Option<usize>) -> crate::tagging::SemanticEntry {
+        crate::tagging::SemanticEntry {
+            tag: crate::tagging::PdfTag::P,
+            parent,
+            alt_text: None,
+        }
+    }
+
+    fn make_h1_semantic_entry(parent: Option<usize>) -> crate::tagging::SemanticEntry {
+        crate::tagging::SemanticEntry {
+            tag: crate::tagging::PdfTag::H { level: 1 },
+            parent,
+            alt_text: None,
+        }
+    }
+
+    #[test]
+    fn build_struct_tree_empty_inputs_yields_empty_tree() {
+        let tc = crate::draw_primitives::TagCollector::new();
+        let d = Drawables::new();
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert!(
+            tree.children.is_empty(),
+            "empty inputs should produce no tree nodes"
+        );
+    }
+
+    #[test]
+    fn build_struct_tree_single_p_node_produces_one_root_group() {
+        let node_id: usize = 1;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record(node_id, crate::tagging::PdfTag::P, id, None);
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_p_semantic_entry(None));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "one semantic root → one Group");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
+
+    #[test]
+    fn build_struct_tree_tc_entry_heading_title_is_forwarded() {
+        // An H2 node recorded via tc.record with an explicit heading_title should
+        // result in a single root Group in the tree (title is opaque to test code,
+        // so we only verify the structure).
+        let node_id: usize = 10;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record(
+            node_id,
+            crate::tagging::PdfTag::H { level: 2 },
+            id,
+            Some("Section title".to_string()),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_h1_semantic_entry(None));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "one root Group");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
+
+    #[test]
+    fn build_struct_tree_run_entry_h_tag_backfills_title_from_paragraph() {
+        // Node uses per-run tagging (tc.record_run, not tc.record), so
+        // heading_titles starts empty. The backfill loop in build_struct_tree
+        // should detect the H tag + non-empty paragraph text and insert the title.
+        let node_id: usize = 20;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(id),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_h1_semantic_entry(None));
+        let text_line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "Intro", None,
+        ))]);
+        d.paragraphs.insert(node_id, make_para(vec![text_line]));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "one root Group from run_entries");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
+
+    #[test]
+    fn build_struct_tree_child_semantic_is_nested_under_parent() {
+        // parent_id has no parent (root); child_id has parent = parent_id.
+        // After build_struct_tree only parent_id appears at the tree root,
+        // with child_id nested one level deeper.
+        let parent_id: usize = 1;
+        let child_id: usize = 2;
+        let parent_tc_id = make_identifier();
+        let child_tc_id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record(parent_id, crate::tagging::PdfTag::P, parent_tc_id, None);
+        tc.record(child_id, crate::tagging::PdfTag::Span, child_tc_id, None);
+        let mut d = Drawables::new();
+        d.semantics.insert(parent_id, make_p_semantic_entry(None));
+        d.semantics.insert(
+            child_id,
+            crate::tagging::SemanticEntry {
+                tag: crate::tagging::PdfTag::Span,
+                parent: Some(parent_id),
+                alt_text: None,
+            },
+        );
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "only parent_id at root level");
+        let Node::Group(ref parent_group) = tree.children[0] else {
+            panic!("expected Group at root");
+        };
+        // parent_group: Leaf(parent_tc_id) + Group(child)
+        assert_eq!(
+            parent_group.children.len(),
+            2,
+            "parent has Leaf + nested child Group"
+        );
+        assert!(
+            matches!(parent_group.children[1], Node::Group(_)),
+            "second child of parent should be a nested Group"
+        );
+    }
 }
