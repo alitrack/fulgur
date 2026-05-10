@@ -577,3 +577,298 @@ pub(super) fn extract_paragraph(
 
     Some(ParagraphRender::new(shaped_lines).with_id(extract_block_id(node)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image::ImageFormat;
+    use crate::paragraph::{
+        InlineBoxItem, InlineImage, LineItem, ShapedGlyphRun, ShapedLine, TextDecoration,
+        VerticalAlign,
+    };
+    use std::sync::Arc;
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.01
+    }
+
+    /// A line with no items (text-only placeholder) and a paragraph-relative
+    /// baseline. `baseline` here is the offset from the paragraph top, matching
+    /// the convention used by `extract_paragraph` (which stores
+    /// `px_to_pt(parley_metrics.baseline)` — a paragraph-relative value).
+    fn text_line(height: f32, baseline: f32) -> ShapedLine {
+        ShapedLine {
+            height,
+            baseline,
+            items: Vec::new(),
+        }
+    }
+
+    fn make_text_run(font_data: Vec<u8>) -> LineItem {
+        LineItem::Text(ShapedGlyphRun {
+            font_data: Arc::new(font_data),
+            font_index: 0,
+            font_size: 12.0,
+            color: [0, 0, 0, 255],
+            decoration: TextDecoration::default(),
+            glyphs: Vec::new(),
+            text: String::new(),
+            x_offset: 0.0,
+            link: None,
+        })
+    }
+
+    fn make_image(width: f32, height: f32, va: VerticalAlign) -> LineItem {
+        LineItem::Image(InlineImage {
+            data: Arc::new(vec![]),
+            format: ImageFormat::Png,
+            width,
+            height,
+            x_offset: 0.0,
+            vertical_align: va,
+            opacity: 1.0,
+            visible: true,
+            computed_y: 0.0,
+            link: None,
+        })
+    }
+
+    fn make_inline_box() -> LineItem {
+        LineItem::InlineBox(InlineBoxItem {
+            node_id: None,
+            width: 10.0,
+            height: 10.0,
+            x_offset: 0.0,
+            computed_y: 0.0,
+            link: None,
+            opacity: 1.0,
+            visible: true,
+        })
+    }
+
+    // Expected fallback values from the `default` literal in `metrics_from_line`.
+    const DEF_ASCENT: f32 = 12.0;
+    const DEF_DESCENT: f32 = 4.0;
+    const DEF_X_HEIGHT: f32 = 8.0;
+    const DEF_SUBSCRIPT: f32 = 4.0;
+    const DEF_SUPERSCRIPT: f32 = 6.0;
+
+    // ── metrics_from_line ──────────────────────────────────────────────────
+
+    #[test]
+    fn metrics_from_line_empty_line_returns_defaults() {
+        let line = text_line(16.0, 12.0);
+        let m = metrics_from_line(&line);
+        assert!(approx(m.ascent, DEF_ASCENT), "ascent={}", m.ascent);
+        assert!(approx(m.descent, DEF_DESCENT), "descent={}", m.descent);
+        assert!(approx(m.x_height, DEF_X_HEIGHT), "x_height={}", m.x_height);
+        assert!(
+            approx(m.subscript_offset, DEF_SUBSCRIPT),
+            "subscript={}",
+            m.subscript_offset
+        );
+        assert!(
+            approx(m.superscript_offset, DEF_SUPERSCRIPT),
+            "superscript={}",
+            m.superscript_offset
+        );
+    }
+
+    /// `LineItem::Image` arms hit the `continue` branch — the function skips
+    /// all image items and falls through to the default return.
+    #[test]
+    fn metrics_from_line_image_only_returns_defaults() {
+        let mut line = text_line(16.0, 12.0);
+        line.items
+            .push(make_image(10.0, 8.0, VerticalAlign::Baseline));
+        let m = metrics_from_line(&line);
+        assert!(approx(m.ascent, DEF_ASCENT), "ascent={}", m.ascent);
+    }
+
+    /// `LineItem::InlineBox` arms hit the `continue` branch — same fallback.
+    #[test]
+    fn metrics_from_line_inline_box_only_returns_defaults() {
+        let mut line = text_line(16.0, 12.0);
+        line.items.push(make_inline_box());
+        let m = metrics_from_line(&line);
+        assert!(approx(m.ascent, DEF_ASCENT), "ascent={}", m.ascent);
+    }
+
+    /// Empty / invalid font bytes cause `skrifa::FontRef::from_index` to fail.
+    /// The `if let Ok(...)` guard is not entered, so the loop continues and the
+    /// function returns defaults after exhausting all items.
+    #[test]
+    fn metrics_from_line_invalid_font_bytes_returns_defaults() {
+        let mut line = text_line(16.0, 12.0);
+        line.items.push(make_text_run(vec![]));
+        let m = metrics_from_line(&line);
+        assert!(approx(m.ascent, DEF_ASCENT), "ascent={}", m.ascent);
+        assert!(approx(m.descent, DEF_DESCENT), "descent={}", m.descent);
+    }
+
+    /// Mixed line: one image (skipped), one text with bad font (falls through),
+    /// one inline-box (skipped) — all paths return defaults.
+    #[test]
+    fn metrics_from_line_mixed_non_text_items_return_defaults() {
+        let mut line = text_line(16.0, 12.0);
+        line.items.push(make_image(5.0, 5.0, VerticalAlign::Middle));
+        line.items.push(make_text_run(vec![0, 1, 2, 3]));
+        line.items.push(make_inline_box());
+        let m = metrics_from_line(&line);
+        assert!(approx(m.ascent, DEF_ASCENT), "ascent={}", m.ascent);
+        assert!(
+            approx(m.subscript_offset, DEF_SUBSCRIPT),
+            "subscript={}",
+            m.subscript_offset
+        );
+    }
+
+    // ── recalculate_paragraph_line_boxes ──────────────────────────────────
+
+    #[test]
+    fn recalculate_paragraph_line_boxes_empty_slice_is_noop() {
+        let mut lines: Vec<ShapedLine> = Vec::new();
+        recalculate_paragraph_line_boxes(&mut lines);
+        assert!(lines.is_empty());
+    }
+
+    /// A text-only line has no images, so `recalculate_line_box` is a no-op
+    /// for both height and baseline.  For the first line `original_y_acc` and
+    /// `new_y_acc` are both 0 — the normalization/de-normalization cancels out
+    /// and the stored values are unchanged.
+    #[test]
+    fn recalculate_paragraph_line_boxes_text_only_single_line_unchanged() {
+        let mut lines = vec![{
+            let mut l = text_line(16.0, 12.0);
+            l.items.push(make_text_run(vec![]));
+            l
+        }];
+        recalculate_paragraph_line_boxes(&mut lines);
+        assert!(approx(lines[0].height, 16.0), "height={}", lines[0].height);
+        assert!(
+            approx(lines[0].baseline, 12.0),
+            "baseline={}",
+            lines[0].baseline
+        );
+    }
+
+    /// Two text-only lines: for each line `new_y_acc == original_y_acc`
+    /// (no expansion), so `baseline -= original_y_acc` and
+    /// `baseline += new_y_acc` cancel out — both baselines are unchanged.
+    #[test]
+    fn recalculate_paragraph_line_boxes_two_text_lines_baselines_unchanged() {
+        // Paragraph-relative baselines: line 0 baseline=12, line 1 baseline=26
+        // (line 0 is 16pt tall, line 1 has 10pt line-relative baseline → 16+10=26).
+        let mut lines = vec![
+            {
+                let mut l = text_line(16.0, 12.0);
+                l.items.push(make_text_run(vec![]));
+                l
+            },
+            {
+                let mut l = text_line(14.0, 26.0);
+                l.items.push(make_text_run(vec![]));
+                l
+            },
+        ];
+        recalculate_paragraph_line_boxes(&mut lines);
+        assert!(
+            approx(lines[0].height, 16.0),
+            "line0 height={}",
+            lines[0].height
+        );
+        assert!(
+            approx(lines[0].baseline, 12.0),
+            "line0 baseline={}",
+            lines[0].baseline
+        );
+        assert!(
+            approx(lines[1].height, 14.0),
+            "line1 height={}",
+            lines[1].height
+        );
+        assert!(
+            approx(lines[1].baseline, 26.0),
+            "line1 baseline={}",
+            lines[1].baseline
+        );
+    }
+
+    /// A Baseline-aligned image that fits inside the first line's box causes no
+    /// height expansion. `recalculate_line_box` sets `img.computed_y` to
+    /// `img_top` (baseline − image_height).  For the first line `new_y_acc==0`,
+    /// so the final paragraph-relative `computed_y` equals the line-relative
+    /// `img_top`.
+    ///
+    /// Line: height=16, baseline=12.  img height=8 → img_top = 12−8 = 4.
+    #[test]
+    fn recalculate_paragraph_line_boxes_baseline_image_in_first_line_sets_computed_y() {
+        let mut lines = vec![{
+            let mut l = text_line(16.0, 12.0);
+            l.items.push(make_image(10.0, 8.0, VerticalAlign::Baseline));
+            l
+        }];
+        recalculate_paragraph_line_boxes(&mut lines);
+        assert!(approx(lines[0].height, 16.0), "height={}", lines[0].height);
+        assert!(
+            approx(lines[0].baseline, 12.0),
+            "baseline={}",
+            lines[0].baseline
+        );
+        if let LineItem::Image(img) = &lines[0].items[0] {
+            assert!(approx(img.computed_y, 4.0), "computed_y={}", img.computed_y);
+        } else {
+            panic!("expected Image at index 0");
+        }
+    }
+
+    /// An image in the SECOND line receives `new_y_acc` (the height of the
+    /// first line) added to its computed_y, making the result paragraph-relative.
+    ///
+    /// Line 0: height=10, baseline=8, text-only  → new_y_acc becomes 10.
+    /// Line 1: height=16, paragraph-relative baseline=18 (line-relative 8),
+    ///         image (Baseline, height=2) → line-relative img_top = 8−2 = 6.
+    ///         After `img.computed_y += new_y_acc(10)` → paragraph-relative = 16.
+    #[test]
+    fn recalculate_paragraph_line_boxes_image_in_second_line_gets_paragraph_offset() {
+        let line1_para_baseline = 10.0 + 8.0; // accumulated height(10) + line-relative baseline(8)
+        let mut lines = vec![
+            {
+                // Line 0: text-only, height=10, paragraph-relative baseline=8.
+                let mut l = text_line(10.0, 8.0);
+                l.items.push(make_text_run(vec![]));
+                l
+            },
+            {
+                // Line 1: one small image (height=2, Baseline). The image fits
+                // within the line box after normalization so no height expansion
+                // occurs: line height stays 16.
+                let mut l = text_line(16.0, line1_para_baseline);
+                l.items.push(make_image(5.0, 2.0, VerticalAlign::Baseline));
+                l
+            },
+        ];
+        recalculate_paragraph_line_boxes(&mut lines);
+
+        // Line 0 must be unchanged.
+        assert!(
+            approx(lines[0].height, 10.0),
+            "line0 height={}",
+            lines[0].height
+        );
+
+        // For line 1: normalize baseline → 18-10=8; img_top=8-2=6; no expansion;
+        // img.computed_y = 6 → += new_y_acc(10) → 16.
+        if let LineItem::Image(img) = &lines[1].items[0] {
+            assert!(
+                approx(img.computed_y, 16.0),
+                "computed_y={}",
+                img.computed_y
+            );
+        } else {
+            panic!("expected Image in line 1 at index 0");
+        }
+    }
+}
