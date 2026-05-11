@@ -153,6 +153,23 @@ fn plugins_command_marks_builtin_shadowed_entries() {
 }
 
 #[test]
+fn plugins_command_reports_no_plugins_for_empty_path() {
+    let dir = TempDir::new().unwrap(); // empty
+    let out = cmd(&[dir.path()]).arg("plugins").output().expect("run");
+    assert!(
+        out.status.success(),
+        "exit={:?}, stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("No fulgur plugins found on $PATH."),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn builtin_render_is_not_shadowed_by_path_entry() {
     let dir = TempDir::new().unwrap();
     // A `fulgur-render` on PATH that would corrupt output if invoked.

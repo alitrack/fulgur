@@ -74,6 +74,53 @@ pub fn list() -> Vec<PluginEntry> {
     list_from_paths(paths)
 }
 
+/// Structured failure modes for [`prepare_dispatch`]. Lifted out of the
+/// `dispatch` body so unit tests can assert on each branch without going
+/// through `CommandExt::exec()` (which destroys llvm-cov profile data).
+#[derive(Debug)]
+pub(crate) enum DispatchError {
+    /// `args` was empty — no subcommand name was supplied.
+    EmptyArgs,
+    /// `fulgur-<name>` was not found on `$PATH`. The inner string is the
+    /// requested subcommand name (without the `fulgur-` prefix).
+    NotFound(String),
+}
+
+/// Build the env-var pair injected into plugin processes. Separated so
+/// unit tests can verify the derivation without going through `exec()`.
+pub(crate) fn plugin_env() -> (OsString, &'static str) {
+    let exec_path = std::env::current_exe()
+        .ok()
+        .map(|p| p.into_os_string())
+        .unwrap_or_else(|| OsString::from("fulgur"));
+    let version = env!("CARGO_PKG_VERSION");
+    (exec_path, version)
+}
+
+/// Pure-function-style preparation step: parse the args, resolve the
+/// plugin on `$PATH`, and build a ready-to-spawn `Command` with the
+/// fulgur env vars set. Does not `exec` or `exit` — the caller is
+/// responsible for converting [`DispatchError`] into user-facing error
+/// messages and process exits.
+pub(crate) fn prepare_dispatch(
+    args: Vec<OsString>,
+) -> Result<(std::process::Command, PathBuf), DispatchError> {
+    let mut iter = args.into_iter();
+    let name_os = iter.next().ok_or(DispatchError::EmptyArgs)?;
+    let name = name_os.to_string_lossy().into_owned();
+    let plugin_args: Vec<OsString> = iter.collect();
+
+    let plugin_path =
+        which::which(format!("fulgur-{name}")).map_err(|_| DispatchError::NotFound(name))?;
+
+    let (exec_path, version) = plugin_env();
+    let mut cmd = std::process::Command::new(&plugin_path);
+    cmd.args(&plugin_args)
+        .env("FULGUR_EXEC_PATH", exec_path)
+        .env("FULGUR_VERSION", version);
+    Ok((cmd, plugin_path))
+}
+
 /// Resolve `fulgur-<name>` on `$PATH` and execute it with the remaining
 /// arguments. Never returns: either replaces the current process (Unix),
 /// exits with the child's status (Windows), or exits 127 if the plugin
@@ -83,63 +130,31 @@ pub fn list() -> Vec<PluginEntry> {
 /// `#[command(external_subcommand)]` variant). `args[1..]` are forwarded
 /// verbatim to the plugin.
 pub fn dispatch(args: Vec<OsString>) -> ! {
-    let mut iter = args.into_iter();
-    let Some(name_os) = iter.next() else {
-        eprintln!("fulgur: empty external subcommand");
-        std::process::exit(2);
-    };
-    let name = name_os.to_string_lossy().into_owned();
-    let plugin_args: Vec<OsString> = iter.collect();
-
-    let binary = format!("fulgur-{name}");
-    let plugin_path = match which::which(&binary) {
-        Ok(p) => p,
-        Err(_) => {
+    match prepare_dispatch(args) {
+        Ok((cmd, plugin_path)) => spawn_plugin(cmd, &plugin_path),
+        Err(DispatchError::EmptyArgs) => {
+            eprintln!("fulgur: empty external subcommand");
+            std::process::exit(2);
+        }
+        Err(DispatchError::NotFound(name)) => {
             eprintln!("fulgur: '{name}' is not a fulgur command. See 'fulgur --help'.");
             std::process::exit(127);
         }
-    };
-
-    let exec_path = std::env::current_exe()
-        .ok()
-        .map(|p| p.into_os_string())
-        .unwrap_or_else(|| OsString::from("fulgur"));
-    let version = env!("CARGO_PKG_VERSION");
-
-    run_plugin(&plugin_path, &plugin_args, &exec_path, version)
+    }
 }
 
 #[cfg(unix)]
-fn run_plugin(
-    plugin_path: &Path,
-    args: &[OsString],
-    exec_path: &std::ffi::OsStr,
-    version: &str,
-) -> ! {
+fn spawn_plugin(mut cmd: std::process::Command, plugin_path: &Path) -> ! {
     use std::os::unix::process::CommandExt;
-    let err = std::process::Command::new(plugin_path)
-        .args(args)
-        .env("FULGUR_EXEC_PATH", exec_path)
-        .env("FULGUR_VERSION", version)
-        .exec();
+    let err = cmd.exec();
     // `exec` only returns on failure.
     eprintln!("fulgur: failed to exec {}: {err}", plugin_path.display());
     std::process::exit(1);
 }
 
 #[cfg(windows)]
-fn run_plugin(
-    plugin_path: &Path,
-    args: &[OsString],
-    exec_path: &std::ffi::OsStr,
-    version: &str,
-) -> ! {
-    let status = std::process::Command::new(plugin_path)
-        .args(args)
-        .env("FULGUR_EXEC_PATH", exec_path)
-        .env("FULGUR_VERSION", version)
-        .status();
-    match status {
+fn spawn_plugin(mut cmd: std::process::Command, plugin_path: &Path) -> ! {
+    match cmd.status() {
         Ok(s) => std::process::exit(s.code().unwrap_or(1)),
         Err(e) => {
             eprintln!("fulgur: failed to spawn {}: {e}", plugin_path.display());
@@ -252,6 +267,127 @@ mod tests {
         assert_eq!(
             strip_plugin_name("fulgur-chart.exe"),
             Some("chart".to_owned())
+        );
+    }
+
+    // Tests that mutate `$PATH` must be serialised: Rust's test harness
+    // runs in parallel by default, and a concurrent test could observe a
+    // half-replaced PATH. The guard is held for the entire body of any
+    // PATH-mutating test (set + assert + restore).
+    fn path_lock() -> &'static std::sync::Mutex<()> {
+        use std::sync::OnceLock;
+        static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_from_paths_skips_unreadable_dirs() {
+        // Non-existent directory must produce a `read_dir` error, which
+        // `list_from_paths` is contractually obliged to silently skip
+        // (the `Err(_) => continue` branch).
+        let nonexistent = PathBuf::from("/nonexistent-fulgur-test-xyzzy");
+        let entries = list_from_paths(std::iter::once(nonexistent));
+        assert!(entries.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_from_paths_handles_empty_dirs() {
+        let dir = tempdir().unwrap();
+        let entries = list_from_paths(std::iter::once(dir.path().to_path_buf()));
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn prepare_dispatch_empty_args_returns_empty_args_error() {
+        match prepare_dispatch(Vec::new()) {
+            Err(DispatchError::EmptyArgs) => {}
+            other => panic!("expected EmptyArgs, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_dispatch_missing_plugin_returns_not_found() {
+        let _g = path_lock().lock().unwrap();
+        let dir = tempdir().unwrap();
+        let prev = std::env::var_os("PATH");
+        // SAFETY: serialised by `path_lock`; restored before the guard drops.
+        unsafe {
+            std::env::set_var("PATH", dir.path());
+        }
+        let result = prepare_dispatch(vec![OsString::from("nonexistent-xyzzy-987")]);
+        match prev {
+            // SAFETY: serialised by `path_lock`.
+            Some(p) => unsafe { std::env::set_var("PATH", p) },
+            // SAFETY: serialised by `path_lock`.
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+        match result {
+            Err(DispatchError::NotFound(name)) => assert_eq!(name, "nonexistent-xyzzy-987"),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_dispatch_success_builds_command_with_env() {
+        let _g = path_lock().lock().unwrap();
+        let dir = tempdir().unwrap();
+        let stub_path = write_exec(dir.path(), "fulgur-stubpd");
+        let prev = std::env::var_os("PATH");
+        // SAFETY: serialised by `path_lock`; restored before the guard drops.
+        unsafe {
+            std::env::set_var("PATH", dir.path());
+        }
+        let result = prepare_dispatch(vec![
+            OsString::from("stubpd"),
+            OsString::from("--flag"),
+            OsString::from("value"),
+        ]);
+        match prev {
+            // SAFETY: serialised by `path_lock`.
+            Some(p) => unsafe { std::env::set_var("PATH", p) },
+            // SAFETY: serialised by `path_lock`.
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+
+        let (cmd, resolved_path) = result.expect("prepare_dispatch should succeed");
+        assert_eq!(resolved_path, stub_path);
+
+        let args: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            vec![OsString::from("--flag"), OsString::from("value")]
+        );
+
+        let envs: std::collections::HashMap<OsString, Option<OsString>> = cmd
+            .get_envs()
+            .map(|(k, v)| (k.to_owned(), v.map(|v| v.to_owned())))
+            .collect();
+        assert!(
+            envs.contains_key(&OsString::from("FULGUR_EXEC_PATH")),
+            "FULGUR_EXEC_PATH not set; envs: {envs:?}"
+        );
+        let version_val = envs
+            .get(&OsString::from("FULGUR_VERSION"))
+            .expect("FULGUR_VERSION not set")
+            .as_ref()
+            .expect("FULGUR_VERSION should not be unset");
+        assert_eq!(
+            version_val,
+            OsString::from(env!("CARGO_PKG_VERSION")).as_os_str()
+        );
+    }
+
+    #[test]
+    fn plugin_env_returns_current_exe_and_version() {
+        let (exec_path, version) = plugin_env();
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        assert!(
+            !exec_path.is_empty(),
+            "exec_path should not be empty (fallback `fulgur` is also non-empty)"
         );
     }
 }
