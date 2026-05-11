@@ -4,6 +4,8 @@ use fulgur::config::{Margin, PageSize};
 use fulgur::engine::Engine;
 use std::path::PathBuf;
 
+mod plugin;
+
 /// Isolate the real stdout from noise emitted by the render pipeline so that
 /// PDF bytes written to stdout (`-o -`) cannot be corrupted by incidental
 /// output from dependencies.
