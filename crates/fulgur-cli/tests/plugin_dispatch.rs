@@ -29,7 +29,7 @@ fn cmd(path_dirs: &[&Path]) -> Command {
 }
 
 #[test]
-fn dispatch_success_echoes_args() {
+fn dispatch_runs_plugin_binary() {
     let dir = TempDir::new().unwrap();
     write_stub(dir.path(), "fulgur-stub", "#!/bin/sh\necho \"hello\"\n");
 

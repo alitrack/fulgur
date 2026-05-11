@@ -34,6 +34,8 @@ where
             Err(_) => continue,
         };
         let mut in_dir: Vec<(String, PathBuf)> = Vec::new();
+        // per-entry errors (e.g. permission denied on a single file) must not
+        // kill the whole listing — silently skip them.
         for entry in read.flatten() {
             let file_name = entry.file_name();
             let name_str = match file_name.to_str() {
