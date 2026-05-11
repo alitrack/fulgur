@@ -645,6 +645,7 @@ fn main() {
             }
         },
         Commands::Plugins => {
+            const BUILTINS: &[&str] = &["render", "inspect", "template", "plugins"];
             let entries = plugin::list();
             if entries.is_empty() {
                 eprintln!("No fulgur plugins found on $PATH.");
@@ -652,7 +653,13 @@ fn main() {
             }
             println!("Available plugins (from $PATH):");
             for entry in entries {
-                let suffix = if entry.shadowed { "  (shadowed)" } else { "" };
+                let suffix = if BUILTINS.contains(&entry.name.as_str()) {
+                    "  (shadowed by built-in)"
+                } else if entry.shadowed {
+                    "  (shadowed)"
+                } else {
+                    ""
+                };
                 println!(
                     "  fulgur-{:<12} {}{}",
                     entry.name,

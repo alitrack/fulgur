@@ -135,6 +135,24 @@ fn plugins_command_marks_shadowed_duplicates() {
 }
 
 #[test]
+fn plugins_command_marks_builtin_shadowed_entries() {
+    let dir = TempDir::new().unwrap();
+    write_stub(dir.path(), "fulgur-render", "#!/bin/sh\n");
+
+    let out = cmd(&[dir.path()]).arg("plugins").output().expect("run");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let render_line = stdout
+        .lines()
+        .find(|l| l.contains("fulgur-render"))
+        .unwrap_or_else(|| panic!("no fulgur-render line in stdout: {stdout}"));
+    assert!(
+        render_line.contains("(shadowed by built-in)"),
+        "expected built-in shadow marker on line: {render_line}"
+    );
+}
+
+#[test]
 fn builtin_render_is_not_shadowed_by_path_entry() {
     let dir = TempDir::new().unwrap();
     // A `fulgur-render` on PATH that would corrupt output if invoked.
