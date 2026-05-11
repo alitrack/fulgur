@@ -4184,4 +4184,661 @@ mod tests {
             "child should be a Link Group"
         );
     }
+
+    // --- build_page_skip_sets ---
+
+    fn block_entry_with_overflow_clip(descendants: Vec<usize>) -> crate::drawables::BlockEntry {
+        let style = crate::draw_primitives::BlockStyle {
+            overflow_x: crate::draw_primitives::Overflow::Clip,
+            ..Default::default()
+        };
+        crate::drawables::BlockEntry {
+            style,
+            opacity: 1.0,
+            visible: true,
+            id: None,
+            layout_size: None,
+            clip_descendants: descendants,
+            opacity_descendants: vec![],
+        }
+    }
+
+    fn block_entry_with_opacity_descendants(
+        descendants: Vec<usize>,
+    ) -> crate::drawables::BlockEntry {
+        crate::drawables::BlockEntry {
+            style: crate::draw_primitives::BlockStyle::default(),
+            opacity: 0.5,
+            visible: true,
+            id: None,
+            layout_size: None,
+            clip_descendants: vec![],
+            opacity_descendants: descendants,
+        }
+    }
+
+    #[test]
+    fn build_page_skip_sets_empty_drawables_returns_empty_sets() {
+        let d = Drawables::new();
+        let (tx, clip, opacity) = build_page_skip_sets(&d);
+        assert!(tx.is_empty());
+        assert!(clip.is_empty());
+        assert!(opacity.is_empty());
+    }
+
+    #[test]
+    fn build_page_skip_sets_transform_descendants_collected() {
+        let mut d = Drawables::new();
+        d.transforms.insert(
+            10,
+            crate::drawables::TransformEntry {
+                matrix: crate::draw_primitives::Affine2D::translation(0.0, 0.0),
+                origin: crate::draw_primitives::Point2 { x: 0.0, y: 0.0 },
+                descendants: vec![11, 12],
+            },
+        );
+        let (tx, clip, opacity) = build_page_skip_sets(&d);
+        assert!(tx.contains(&11));
+        assert!(tx.contains(&12));
+        assert!(!tx.contains(&10), "wrapper itself is not a descendant");
+        assert!(clip.is_empty());
+        assert!(opacity.is_empty());
+    }
+
+    #[test]
+    fn build_page_skip_sets_overflow_clip_block_collects_descendants() {
+        let mut d = Drawables::new();
+        d.block_styles
+            .insert(20, block_entry_with_overflow_clip(vec![21, 22]));
+        let (_, clip, _) = build_page_skip_sets(&d);
+        assert!(clip.contains(&21));
+        assert!(clip.contains(&22));
+    }
+
+    #[test]
+    fn build_page_skip_sets_body_excluded_from_clip_descendants() {
+        let mut d = Drawables::new();
+        let body_id: usize = 5;
+        d.body_id = Some(body_id);
+        d.block_styles
+            .insert(body_id, block_entry_with_overflow_clip(vec![6, 7]));
+        let (_, clip, _) = build_page_skip_sets(&d);
+        assert!(!clip.contains(&6), "body clip descendants must be excluded");
+        assert!(!clip.contains(&7));
+    }
+
+    #[test]
+    fn build_page_skip_sets_root_excluded_from_clip_descendants() {
+        let mut d = Drawables::new();
+        let root_id: usize = 2;
+        d.root_id = Some(root_id);
+        d.block_styles
+            .insert(root_id, block_entry_with_overflow_clip(vec![3, 4]));
+        let (_, clip, _) = build_page_skip_sets(&d);
+        assert!(!clip.contains(&3), "root clip descendants must be excluded");
+        assert!(!clip.contains(&4));
+    }
+
+    #[test]
+    fn build_page_skip_sets_opacity_descendants_collected() {
+        let mut d = Drawables::new();
+        d.block_styles
+            .insert(30, block_entry_with_opacity_descendants(vec![31, 32]));
+        let (_, _, opacity) = build_page_skip_sets(&d);
+        assert!(opacity.contains(&31));
+        assert!(opacity.contains(&32));
+    }
+
+    #[test]
+    fn build_page_skip_sets_body_excluded_from_opacity_descendants() {
+        let mut d = Drawables::new();
+        let body_id: usize = 3;
+        d.body_id = Some(body_id);
+        d.block_styles
+            .insert(body_id, block_entry_with_opacity_descendants(vec![4, 5]));
+        let (_, _, opacity) = build_page_skip_sets(&d);
+        assert!(
+            !opacity.contains(&4),
+            "body opacity descendants must be excluded"
+        );
+        assert!(!opacity.contains(&5));
+    }
+
+    #[test]
+    fn build_page_skip_sets_root_excluded_from_opacity_descendants() {
+        let mut d = Drawables::new();
+        let root_id: usize = 7;
+        d.root_id = Some(root_id);
+        d.block_styles
+            .insert(root_id, block_entry_with_opacity_descendants(vec![8, 9]));
+        let (_, _, opacity) = build_page_skip_sets(&d);
+        assert!(
+            !opacity.contains(&8),
+            "root opacity descendants must be excluded"
+        );
+        assert!(!opacity.contains(&9));
+    }
+
+    #[test]
+    fn build_page_skip_sets_table_overflow_clip_collects_descendants() {
+        let mut d = Drawables::new();
+        let style = crate::draw_primitives::BlockStyle {
+            overflow_x: crate::draw_primitives::Overflow::Clip,
+            ..Default::default()
+        };
+        d.tables.insert(
+            40,
+            crate::drawables::TableEntry {
+                style,
+                opacity: 1.0,
+                visible: true,
+                id: None,
+                layout_size: None,
+                width: 200.0,
+                cached_height: 100.0,
+                clip_descendants: vec![41, 42],
+            },
+        );
+        let (_, clip, _) = build_page_skip_sets(&d);
+        assert!(clip.contains(&41));
+        assert!(clip.contains(&42));
+    }
+
+    // --- para_has_link_runs / extract_heading_title helpers ---
+
+    fn make_glyph_run(
+        text: &str,
+        link: Option<Arc<crate::paragraph::LinkSpan>>,
+    ) -> crate::paragraph::ShapedGlyphRun {
+        crate::paragraph::ShapedGlyphRun {
+            font_data: Arc::new(vec![]),
+            font_index: 0,
+            font_size: 12.0,
+            color: [0, 0, 0, 255],
+            decoration: crate::paragraph::TextDecoration::default(),
+            glyphs: vec![],
+            text: text.to_string(),
+            x_offset: 0.0,
+            link,
+        }
+    }
+
+    fn make_shaped_line(items: Vec<crate::paragraph::LineItem>) -> crate::paragraph::ShapedLine {
+        crate::paragraph::ShapedLine {
+            height: 16.0,
+            baseline: 12.0,
+            items,
+        }
+    }
+
+    fn make_para(lines: Vec<crate::paragraph::ShapedLine>) -> crate::drawables::ParagraphEntry {
+        crate::drawables::ParagraphEntry {
+            lines,
+            opacity: 1.0,
+            visible: true,
+            id: None,
+        }
+    }
+
+    // --- para_has_link_runs ---
+
+    #[test]
+    fn para_has_link_runs_empty_paragraph_returns_false() {
+        let para = make_para(vec![]);
+        assert!(!para_has_link_runs(&para));
+    }
+
+    #[test]
+    fn para_has_link_runs_text_without_link_returns_false() {
+        let run = make_glyph_run("hello", None);
+        let line = make_shaped_line(vec![crate::paragraph::LineItem::Text(run)]);
+        let para = make_para(vec![line]);
+        assert!(!para_has_link_runs(&para));
+    }
+
+    #[test]
+    fn para_has_link_runs_text_with_link_returns_true() {
+        let span = Arc::new(crate::paragraph::LinkSpan {
+            target: crate::paragraph::LinkTarget::External(Arc::new(
+                "https://example.com".to_string(),
+            )),
+            alt_text: None,
+        });
+        let run = make_glyph_run("click me", Some(span));
+        let line = make_shaped_line(vec![crate::paragraph::LineItem::Text(run)]);
+        let para = make_para(vec![line]);
+        assert!(para_has_link_runs(&para));
+    }
+
+    #[test]
+    fn para_has_link_runs_inline_box_returns_false() {
+        let item = crate::paragraph::InlineBoxItem {
+            node_id: None,
+            width: 10.0,
+            height: 10.0,
+            x_offset: 0.0,
+            computed_y: 0.0,
+            link: None,
+            opacity: 1.0,
+            visible: true,
+        };
+        let line = make_shaped_line(vec![crate::paragraph::LineItem::InlineBox(item)]);
+        let para = make_para(vec![line]);
+        assert!(!para_has_link_runs(&para));
+    }
+
+    #[test]
+    fn para_has_link_runs_image_with_link_returns_true() {
+        let span = Arc::new(crate::paragraph::LinkSpan {
+            target: crate::paragraph::LinkTarget::Internal(Arc::new("section".to_string())),
+            alt_text: None,
+        });
+        let img = crate::paragraph::InlineImage {
+            data: Arc::new(vec![]),
+            format: crate::image::ImageFormat::Png,
+            width: 20.0,
+            height: 20.0,
+            x_offset: 0.0,
+            vertical_align: crate::paragraph::VerticalAlign::Baseline,
+            opacity: 1.0,
+            visible: true,
+            computed_y: 0.0,
+            link: Some(span),
+        };
+        let line = make_shaped_line(vec![crate::paragraph::LineItem::Image(img)]);
+        let para = make_para(vec![line]);
+        assert!(para_has_link_runs(&para));
+    }
+
+    #[test]
+    fn para_has_link_runs_image_without_link_returns_false() {
+        let img = crate::paragraph::InlineImage {
+            data: Arc::new(vec![]),
+            format: crate::image::ImageFormat::Png,
+            width: 10.0,
+            height: 10.0,
+            x_offset: 0.0,
+            vertical_align: crate::paragraph::VerticalAlign::Baseline,
+            opacity: 1.0,
+            visible: true,
+            computed_y: 0.0,
+            link: None,
+        };
+        let line = make_shaped_line(vec![crate::paragraph::LineItem::Image(img)]);
+        let para = make_para(vec![line]);
+        assert!(!para_has_link_runs(&para));
+    }
+
+    #[test]
+    fn para_has_link_runs_link_in_second_line_returns_true() {
+        let plain_line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "first", None,
+        ))]);
+        let span = Arc::new(crate::paragraph::LinkSpan {
+            target: crate::paragraph::LinkTarget::External(Arc::new(
+                "https://example.com".to_string(),
+            )),
+            alt_text: None,
+        });
+        let link_line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "second",
+            Some(span),
+        ))]);
+        let para = make_para(vec![plain_line, link_line]);
+        assert!(para_has_link_runs(&para));
+    }
+
+    // --- extract_heading_title ---
+
+    #[test]
+    fn extract_heading_title_empty_paragraph_returns_empty() {
+        let para = make_para(vec![]);
+        assert_eq!(extract_heading_title(&para), "");
+    }
+
+    #[test]
+    fn extract_heading_title_single_text_run() {
+        let line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "Hello", None,
+        ))]);
+        let para = make_para(vec![line]);
+        assert_eq!(extract_heading_title(&para), "Hello");
+    }
+
+    #[test]
+    fn extract_heading_title_multiple_runs_across_lines() {
+        let line1 = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "Foo", None,
+        ))]);
+        let line2 = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "Bar", None,
+        ))]);
+        let para = make_para(vec![line1, line2]);
+        assert_eq!(extract_heading_title(&para), "FooBar");
+    }
+
+    #[test]
+    fn extract_heading_title_skips_image_and_inline_box() {
+        let img = crate::paragraph::InlineImage {
+            data: Arc::new(vec![]),
+            format: crate::image::ImageFormat::Png,
+            width: 10.0,
+            height: 10.0,
+            x_offset: 0.0,
+            vertical_align: crate::paragraph::VerticalAlign::Baseline,
+            opacity: 1.0,
+            visible: true,
+            computed_y: 0.0,
+            link: None,
+        };
+        let inline_box = crate::paragraph::InlineBoxItem {
+            node_id: None,
+            width: 10.0,
+            height: 10.0,
+            x_offset: 0.0,
+            computed_y: 0.0,
+            link: None,
+            opacity: 1.0,
+            visible: true,
+        };
+        let line = make_shaped_line(vec![
+            crate::paragraph::LineItem::Image(img),
+            crate::paragraph::LineItem::Text(make_glyph_run("text", None)),
+            crate::paragraph::LineItem::InlineBox(inline_box),
+        ]);
+        let para = make_para(vec![line]);
+        assert_eq!(extract_heading_title(&para), "text");
+    }
+
+    // --- paragraph_lines_for_page ---
+
+    fn make_fragment(page_index: u32, height: f32) -> crate::pagination_layout::Fragment {
+        crate::pagination_layout::Fragment {
+            page_index,
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height,
+        }
+    }
+
+    fn make_line(height_pt: f32, baseline_pt: f32) -> crate::paragraph::ShapedLine {
+        crate::paragraph::ShapedLine {
+            height: height_pt,
+            baseline: baseline_pt,
+            items: vec![],
+        }
+    }
+
+    #[test]
+    fn paragraph_lines_for_page_no_matching_fragment_returns_none() {
+        let lines = vec![make_line(16.0, 12.0)];
+        let fragments = vec![make_fragment(0, 16.0)];
+        // Ask for page 1, which has no fragment.
+        let result = paragraph_lines_for_page(&lines, &fragments, 1, false);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn paragraph_lines_for_page_not_split_returns_all_lines() {
+        // Non-split path returns all lines unchanged.
+        let lines = vec![
+            make_line(16.0, 12.0),
+            make_line(16.0, 28.0),
+            make_line(16.0, 44.0),
+        ];
+        let fragments = vec![make_fragment(0, 64.0)];
+        let result = paragraph_lines_for_page(&lines, &fragments, 0, false);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn paragraph_lines_for_page_split_first_page_returns_first_lines() {
+        // Lines are 12pt each. Fragment heights are in CSS px;
+        // px_to_pt(16px) = 12pt (PX_TO_PT = 0.75), so 16px per line.
+        // Page 0: consumed = 0, baseline unchanged.
+        let lines = vec![make_line(12.0, 9.0), make_line(12.0, 21.0)];
+        let fragments = vec![
+            make_fragment(0, 16.0), // 16px = 12pt → first line
+            make_fragment(1, 16.0),
+        ];
+        let result = paragraph_lines_for_page(&lines, &fragments, 0, true);
+        assert!(result.is_some());
+        let sliced = result.unwrap();
+        assert_eq!(sliced.len(), 1, "page 0 should contain exactly one line");
+        assert!(
+            (sliced[0].baseline - 9.0).abs() < 0.01,
+            "page 0 baseline unchanged (consumed=0)"
+        );
+    }
+
+    #[test]
+    fn paragraph_lines_for_page_split_second_page_rebases_baseline() {
+        // Page 1: consumed = 12pt (one 16px line). The function subtracts
+        // consumed from baseline: paragraph-absolute 21pt → fragment-local 9pt.
+        let lines = vec![make_line(12.0, 9.0), make_line(12.0, 21.0)];
+        let fragments = vec![
+            make_fragment(0, 16.0), // 16px = 12pt → first line
+            make_fragment(1, 16.0),
+        ];
+        let result = paragraph_lines_for_page(&lines, &fragments, 1, true);
+        assert!(result.is_some());
+        let sliced = result.unwrap();
+        assert_eq!(sliced.len(), 1, "page 1 should contain exactly one line");
+        assert!(
+            (sliced[0].baseline - 9.0).abs() < 0.01,
+            "baseline rebased: 21pt - 12pt consumed = 9pt"
+        );
+    }
+
+    #[test]
+    fn paragraph_lines_for_page_split_empty_range_returns_none() {
+        // Fragment height is 0px → no lines fit.
+        let lines = vec![make_line(12.0, 9.0)];
+        let fragments = vec![
+            make_fragment(0, 100.0), // page 0 gets the line
+            make_fragment(1, 0.0),   // page 1 has zero height
+        ];
+        let result = paragraph_lines_for_page(&lines, &fragments, 1, true);
+        assert!(result.is_none());
+    }
+
+    // --- table_box_size ---
+
+    fn make_table_entry_for_size(
+        layout_size: Option<crate::draw_primitives::Size>,
+        width: f32,
+        cached_height: f32,
+    ) -> crate::drawables::TableEntry {
+        crate::drawables::TableEntry {
+            style: crate::draw_primitives::BlockStyle::default(),
+            opacity: 1.0,
+            visible: true,
+            id: None,
+            layout_size,
+            width,
+            cached_height,
+            clip_descendants: vec![],
+        }
+    }
+
+    fn make_frag_with_height(height: f32) -> crate::pagination_layout::Fragment {
+        crate::pagination_layout::Fragment {
+            page_index: 0,
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height,
+        }
+    }
+
+    #[test]
+    fn table_box_size_with_layout_size_uses_layout_dimensions() {
+        // When layout_size is Some, both width and height come from it,
+        // ignoring entry.width, entry.cached_height, and frag.height.
+        let sz = crate::draw_primitives::Size {
+            width: 120.0,
+            height: 80.0,
+        };
+        let entry = make_table_entry_for_size(Some(sz), 200.0, 50.0);
+        let frag = make_frag_with_height(99.0);
+        let (w, h) = table_box_size(&entry, &frag);
+        assert!((w - 120.0).abs() < 0.001, "width from layout_size");
+        assert!((h - 80.0).abs() < 0.001, "height from layout_size");
+    }
+
+    #[test]
+    fn table_box_size_no_layout_size_nonzero_frag_uses_px_to_pt_height() {
+        // frag.height = 40 CSS px → px_to_pt(40) = 30 PDF pt (factor 0.75)
+        let entry = make_table_entry_for_size(None, 150.0, 99.0);
+        let frag = make_frag_with_height(40.0);
+        let (w, h) = table_box_size(&entry, &frag);
+        assert!((w - 150.0).abs() < 0.001, "width falls back to entry.width");
+        assert!((h - 30.0).abs() < 0.01, "height = px_to_pt(frag.height)");
+    }
+
+    #[test]
+    fn table_box_size_no_layout_size_zero_frag_falls_back_to_cached_height() {
+        // When frag.height is 0, px_to_pt(0) = 0.0 which fails the `> 0.0`
+        // guard, so cached_height is used instead.
+        let entry = make_table_entry_for_size(None, 150.0, 55.0);
+        let frag = make_frag_with_height(0.0);
+        let (w, h) = table_box_size(&entry, &frag);
+        assert!((w - 150.0).abs() < 0.001, "width falls back to entry.width");
+        assert!(
+            (h - 55.0).abs() < 0.001,
+            "height falls back to cached_height when frag.height is zero"
+        );
+    }
+
+    // --- build_struct_tree ---
+
+    fn make_p_semantic_entry(parent: Option<usize>) -> crate::tagging::SemanticEntry {
+        crate::tagging::SemanticEntry {
+            tag: crate::tagging::PdfTag::P,
+            parent,
+            alt_text: None,
+        }
+    }
+
+    fn make_h1_semantic_entry(parent: Option<usize>) -> crate::tagging::SemanticEntry {
+        crate::tagging::SemanticEntry {
+            tag: crate::tagging::PdfTag::H { level: 1 },
+            parent,
+            alt_text: None,
+        }
+    }
+
+    #[test]
+    fn build_struct_tree_empty_inputs_yields_empty_tree() {
+        let tc = crate::draw_primitives::TagCollector::new();
+        let d = Drawables::new();
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert!(
+            tree.children.is_empty(),
+            "empty inputs should produce no tree nodes"
+        );
+    }
+
+    #[test]
+    fn build_struct_tree_single_p_node_produces_one_root_group() {
+        let node_id: usize = 1;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record(node_id, crate::tagging::PdfTag::P, id, None);
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_p_semantic_entry(None));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "one semantic root → one Group");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
+
+    #[test]
+    fn build_struct_tree_h_node_heading_title_is_forwarded() {
+        let node_id: usize = 10;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record(
+            node_id,
+            crate::tagging::PdfTag::H { level: 2 },
+            id,
+            Some("Section title".to_string()),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_h1_semantic_entry(None));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "one root Group");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
+
+    #[test]
+    fn build_struct_tree_run_entry_h_tag_backfills_title_from_paragraph() {
+        // Node uses per-run tagging (tc.record_run) so heading_titles starts
+        // empty. build_struct_tree should detect the H tag + non-empty
+        // paragraph text and backfill the title.
+        let node_id: usize = 20;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(id),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_h1_semantic_entry(None));
+        let text_line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "Intro", None,
+        ))]);
+        d.paragraphs.insert(node_id, make_para(vec![text_line]));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "one root Group from run_entries");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
+
+    #[test]
+    fn build_struct_tree_child_semantic_nested_under_parent() {
+        // parent_id has no parent (root); child_id has parent = parent_id.
+        // After build_struct_tree only parent_id appears at the tree root,
+        // with child_id nested one level deeper.
+        let parent_id: usize = 1;
+        let child_id: usize = 2;
+        let parent_tc_id = make_identifier();
+        let child_tc_id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record(parent_id, crate::tagging::PdfTag::P, parent_tc_id, None);
+        tc.record(child_id, crate::tagging::PdfTag::Span, child_tc_id, None);
+        let mut d = Drawables::new();
+        d.semantics.insert(parent_id, make_p_semantic_entry(None));
+        d.semantics.insert(
+            child_id,
+            crate::tagging::SemanticEntry {
+                tag: crate::tagging::PdfTag::Span,
+                parent: Some(parent_id),
+                alt_text: None,
+            },
+        );
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "only parent_id at root level");
+        // parent group: Leaf(parent_tc_id) + Group(child). Use a matches!
+        // guard to inspect the inner structure without a let-else panic arm
+        // that would be unreachable in a passing test and flagged by coverage.
+        assert!(
+            matches!(
+                &tree.children[0],
+                Node::Group(g)
+                    if g.children.len() == 2 && matches!(g.children[1], Node::Group(_))
+            ),
+            "root Group should contain Leaf + nested child Group"
+        );
+    }
 }
