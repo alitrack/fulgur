@@ -231,7 +231,7 @@ mod tests {
         write_exec(a.path(), "fulgur-dup");
         write_exec(b.path(), "fulgur-dup");
 
-        let entries = list_from_paths([a.path().to_path_buf(), b.path().to_path_buf()].into_iter());
+        let entries = list_from_paths([a.path().to_path_buf(), b.path().to_path_buf()]);
         let dups: Vec<&PluginEntry> = entries.iter().filter(|e| e.name == "dup").collect();
         assert_eq!(dups.len(), 2);
         assert!(!dups[0].shadowed);
