@@ -3,6 +3,7 @@
 //! `fulgur <name>` execs `fulgur-<name>` from `$PATH` when `<name>` is not
 //! a built-in subcommand. `fulgur plugins` lists discovered plugins.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// One plugin entry discovered on `$PATH`.
@@ -69,6 +70,80 @@ pub fn list() -> Vec<PluginEntry> {
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
     list_from_paths(paths)
+}
+
+/// Resolve `fulgur-<name>` on `$PATH` and execute it with the remaining
+/// arguments. Never returns: either replaces the current process (Unix),
+/// exits with the child's status (Windows), or exits 127 if the plugin
+/// is not found.
+///
+/// `args[0]` is the subcommand name (as clap routes the
+/// `#[command(external_subcommand)]` variant). `args[1..]` are forwarded
+/// verbatim to the plugin.
+pub fn dispatch(args: Vec<OsString>) -> ! {
+    let mut iter = args.into_iter();
+    let Some(name_os) = iter.next() else {
+        eprintln!("fulgur: empty external subcommand");
+        std::process::exit(2);
+    };
+    let name = name_os.to_string_lossy().into_owned();
+    let plugin_args: Vec<OsString> = iter.collect();
+
+    let binary = format!("fulgur-{name}");
+    let plugin_path = match which::which(&binary) {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("fulgur: '{name}' is not a fulgur command. See 'fulgur --help'.");
+            std::process::exit(127);
+        }
+    };
+
+    let exec_path = std::env::current_exe()
+        .ok()
+        .map(|p| p.into_os_string())
+        .unwrap_or_else(|| OsString::from("fulgur"));
+    let version = env!("CARGO_PKG_VERSION");
+
+    run_plugin(&plugin_path, &plugin_args, &exec_path, version)
+}
+
+#[cfg(unix)]
+fn run_plugin(
+    plugin_path: &Path,
+    args: &[OsString],
+    exec_path: &std::ffi::OsStr,
+    version: &str,
+) -> ! {
+    use std::os::unix::process::CommandExt;
+    let err = std::process::Command::new(plugin_path)
+        .args(args)
+        .env("FULGUR_EXEC_PATH", exec_path)
+        .env("FULGUR_VERSION", version)
+        .exec();
+    // `exec` only returns on failure.
+    eprintln!("fulgur: failed to exec {}: {err}", plugin_path.display());
+    std::process::exit(1);
+}
+
+#[cfg(windows)]
+fn run_plugin(
+    plugin_path: &Path,
+    args: &[OsString],
+    exec_path: &std::ffi::OsStr,
+    version: &str,
+) -> ! {
+    let status = std::process::Command::new(plugin_path)
+        .args(args)
+        .env("FULGUR_EXEC_PATH", exec_path)
+        .env("FULGUR_VERSION", version)
+        .status();
+    match status {
+        Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("fulgur: failed to spawn {}: {e}", plugin_path.display());
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Strip the `fulgur-` prefix and platform-specific executable extension
@@ -163,5 +238,18 @@ mod tests {
         assert!(dups[1].shadowed);
         assert_eq!(dups[0].path, a.path().join("fulgur-dup"));
         assert_eq!(dups[1].path, b.path().join("fulgur-dup"));
+    }
+
+    #[test]
+    fn strip_plugin_name_rejects_non_plugins() {
+        assert_eq!(strip_plugin_name("fulgur-chart"), Some("chart".to_owned()));
+        assert_eq!(strip_plugin_name("fulgur-"), None);
+        assert_eq!(strip_plugin_name("fulgur-foo.bak"), None);
+        assert_eq!(strip_plugin_name("other-tool"), None);
+        #[cfg(windows)]
+        assert_eq!(
+            strip_plugin_name("fulgur-chart.exe"),
+            Some("chart".to_owned())
+        );
     }
 }
