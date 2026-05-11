@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use fulgur::asset::AssetBundle;
 use fulgur::config::{Margin, PageSize};
 use fulgur::engine::Engine;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 mod plugin;
@@ -246,6 +247,11 @@ enum Commands {
         #[command(subcommand)]
         command: TemplateCommands,
     },
+    /// List discovered plugins on `$PATH`.
+    Plugins,
+    /// External plugin: dispatches to `fulgur-<name>` on `$PATH`.
+    #[command(external_subcommand)]
+    External(Vec<OsString>),
 }
 
 #[derive(Subcommand)]
@@ -638,5 +644,25 @@ fn main() {
                 }
             }
         },
+        Commands::Plugins => {
+            let entries = plugin::list();
+            if entries.is_empty() {
+                eprintln!("No fulgur plugins found on $PATH.");
+                return;
+            }
+            println!("Available plugins (from $PATH):");
+            for entry in entries {
+                let suffix = if entry.shadowed { "  (shadowed)" } else { "" };
+                println!(
+                    "  fulgur-{:<12} {}{}",
+                    entry.name,
+                    entry.path.display(),
+                    suffix
+                );
+            }
+        }
+        Commands::External(args) => {
+            plugin::dispatch(args);
+        }
     }
 }
