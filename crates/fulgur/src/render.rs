@@ -4775,7 +4775,17 @@ mod tests {
         let mut tree = TagTree::new();
         build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
         assert_eq!(tree.children.len(), 1, "one root Group");
-        assert!(matches!(tree.children[0], Node::Group(_)));
+        let Node::Group(ref group) = tree.children[0] else {
+            panic!("expected Node::Group");
+        };
+        let krilla::tagging::TagKind::Hn(ref hn) = group.tag else {
+            panic!("expected TagKind::Hn");
+        };
+        assert_eq!(
+            hn.title(),
+            Some("Section title"),
+            "heading title must be forwarded"
+        );
     }
 
     #[test]
@@ -4800,7 +4810,17 @@ mod tests {
         let mut tree = TagTree::new();
         build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
         assert_eq!(tree.children.len(), 1, "one root Group from run_entries");
-        assert!(matches!(tree.children[0], Node::Group(_)));
+        let Node::Group(ref group) = tree.children[0] else {
+            panic!("expected Node::Group");
+        };
+        let krilla::tagging::TagKind::Hn(ref hn) = group.tag else {
+            panic!("expected TagKind::Hn");
+        };
+        assert_eq!(
+            hn.title(),
+            Some("Intro"),
+            "title must be backfilled from paragraph text"
+        );
     }
 
     #[test]
