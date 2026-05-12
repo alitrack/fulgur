@@ -4924,6 +4924,9 @@ mod tests {
     }
 
     // --- build_metadata ---
+    //
+    // krilla::metadata::Metadata fields are pub(crate), so we use Debug formatting
+    // to assert field values where meaningful behavior needs verification.
 
     #[test]
     fn build_metadata_default_config_does_not_panic() {
@@ -4931,86 +4934,135 @@ mod tests {
         // branch. All other optional fields are None / empty, so their branches
         // are skipped without panicking.
         let config = Config::default();
-        let _ = build_metadata(&config, None);
+        let meta = build_metadata(&config, None);
+        let debug = format!("{meta:?}");
+        assert!(
+            debug.contains("\"fulgur\""),
+            "default producer should appear in metadata"
+        );
     }
 
     #[test]
     fn build_metadata_config_title_overrides_html_title() {
         // config.title is Some → effective_title = Some("Config Title"), html_title ignored.
-        let mut config = Config::default();
-        config.title = Some("Config Title".to_string());
-        let _ = build_metadata(&config, Some("HTML Title"));
+        let config = Config {
+            title: Some("Config Title".to_string()),
+            ..Default::default()
+        };
+        let meta = build_metadata(&config, Some("HTML Title"));
+        let debug = format!("{meta:?}");
+        assert!(
+            debug.contains("\"Config Title\""),
+            "config.title should take priority"
+        );
+        assert!(
+            !debug.contains("\"HTML Title\""),
+            "html_title should be ignored when config.title is set"
+        );
     }
 
     #[test]
     fn build_metadata_html_title_fallback_when_config_title_none() {
         // config.title is None → effective_title = html_title via .or().
         let config = Config::default();
-        let _ = build_metadata(&config, Some("HTML Title"));
+        let meta = build_metadata(&config, Some("HTML Title"));
+        let debug = format!("{meta:?}");
+        assert!(
+            debug.contains("\"HTML Title\""),
+            "html_title should be used as fallback when config.title is None"
+        );
     }
 
     #[test]
     fn build_metadata_with_authors() {
-        let mut config = Config::default();
-        config.authors = vec!["Alice".to_string(), "Bob".to_string()];
+        let config = Config {
+            authors: vec!["Alice".to_string(), "Bob".to_string()],
+            ..Default::default()
+        };
         let _ = build_metadata(&config, None);
     }
 
     #[test]
     fn build_metadata_with_description() {
-        let mut config = Config::default();
-        config.description = Some("A test document.".to_string());
+        let config = Config {
+            description: Some("A test document.".to_string()),
+            ..Default::default()
+        };
         let _ = build_metadata(&config, None);
     }
 
     #[test]
     fn build_metadata_with_keywords() {
-        let mut config = Config::default();
-        config.keywords = vec!["rust".to_string(), "pdf".to_string()];
+        let config = Config {
+            keywords: vec!["rust".to_string(), "pdf".to_string()],
+            ..Default::default()
+        };
         let _ = build_metadata(&config, None);
     }
 
     #[test]
     fn build_metadata_with_lang() {
-        let mut config = Config::default();
-        config.lang = Some("ja".to_string());
+        let config = Config {
+            lang: Some("ja".to_string()),
+            ..Default::default()
+        };
         let _ = build_metadata(&config, None);
     }
 
     #[test]
     fn build_metadata_with_creator() {
-        let mut config = Config::default();
-        config.creator = Some("FulgurTest".to_string());
+        let config = Config {
+            creator: Some("FulgurTest".to_string()),
+            ..Default::default()
+        };
         let _ = build_metadata(&config, None);
     }
 
     #[test]
     fn build_metadata_with_valid_creation_date() {
         // Exercises the `if let Some(dt) = parse_datetime(date_str)` true branch.
-        let mut config = Config::default();
-        config.creation_date = Some("2026-05-12T10:30:00".to_string());
-        let _ = build_metadata(&config, None);
+        // Debug output shows `creation_date: Some(...)` when the date is valid.
+        let config = Config {
+            creation_date: Some("2026-05-12T10:30:00".to_string()),
+            ..Default::default()
+        };
+        let meta = build_metadata(&config, None);
+        let debug = format!("{meta:?}");
+        assert!(
+            debug.contains("creation_date: Some"),
+            "valid ISO-8601 date should be parsed and set: {debug}"
+        );
     }
 
     #[test]
-    fn build_metadata_with_invalid_creation_date_does_not_panic() {
-        // parse_datetime returns None → the inner `if let Some(dt)` arm is skipped.
-        let mut config = Config::default();
-        config.creation_date = Some("not-a-date".to_string());
-        let _ = build_metadata(&config, None);
+    fn build_metadata_with_invalid_creation_date_does_not_set_date() {
+        // parse_datetime returns None → the inner `if let Some(dt)` arm is skipped,
+        // leaving creation_date unset on the Metadata struct.
+        let config = Config {
+            creation_date: Some("not-a-date".to_string()),
+            ..Default::default()
+        };
+        let meta = build_metadata(&config, None);
+        let debug = format!("{meta:?}");
+        assert!(
+            debug.contains("creation_date: None"),
+            "invalid date should leave creation_date as None: {debug}"
+        );
     }
 
     #[test]
     fn build_metadata_all_optional_fields_set() {
-        let mut config = Config::default();
-        config.title = Some("Full Test Title".to_string());
-        config.authors = vec!["Author A".to_string()];
-        config.description = Some("Full description.".to_string());
-        config.keywords = vec!["key1".to_string(), "key2".to_string()];
-        config.lang = Some("en".to_string());
-        config.creator = Some("Creator App".to_string());
-        config.producer = Some("Fulgur PDF".to_string());
-        config.creation_date = Some("2026-01-01".to_string());
+        let config = Config {
+            title: Some("Full Test Title".to_string()),
+            authors: vec!["Author A".to_string()],
+            description: Some("Full description.".to_string()),
+            keywords: vec!["key1".to_string(), "key2".to_string()],
+            lang: Some("en".to_string()),
+            creator: Some("Creator App".to_string()),
+            producer: Some("Fulgur PDF".to_string()),
+            creation_date: Some("2026-01-01".to_string()),
+            ..Default::default()
+        };
         let _ = build_metadata(&config, None);
     }
 
