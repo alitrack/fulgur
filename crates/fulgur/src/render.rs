@@ -4922,4 +4922,229 @@ mod tests {
             "root Group should contain Leaf + nested child Group"
         );
     }
+
+    // --- build_metadata ---
+
+    #[test]
+    fn build_metadata_default_config_does_not_panic() {
+        // Config::default() has producer=Some("fulgur") — exercises the producer
+        // branch. All other optional fields are None / empty, so their branches
+        // are skipped without panicking.
+        let config = Config::default();
+        let _ = build_metadata(&config, None);
+    }
+
+    #[test]
+    fn build_metadata_config_title_overrides_html_title() {
+        // config.title is Some → effective_title = Some("Config Title"), html_title ignored.
+        let mut config = Config::default();
+        config.title = Some("Config Title".to_string());
+        let _ = build_metadata(&config, Some("HTML Title"));
+    }
+
+    #[test]
+    fn build_metadata_html_title_fallback_when_config_title_none() {
+        // config.title is None → effective_title = html_title via .or().
+        let config = Config::default();
+        let _ = build_metadata(&config, Some("HTML Title"));
+    }
+
+    #[test]
+    fn build_metadata_with_authors() {
+        let mut config = Config::default();
+        config.authors = vec!["Alice".to_string(), "Bob".to_string()];
+        let _ = build_metadata(&config, None);
+    }
+
+    #[test]
+    fn build_metadata_with_description() {
+        let mut config = Config::default();
+        config.description = Some("A test document.".to_string());
+        let _ = build_metadata(&config, None);
+    }
+
+    #[test]
+    fn build_metadata_with_keywords() {
+        let mut config = Config::default();
+        config.keywords = vec!["rust".to_string(), "pdf".to_string()];
+        let _ = build_metadata(&config, None);
+    }
+
+    #[test]
+    fn build_metadata_with_lang() {
+        let mut config = Config::default();
+        config.lang = Some("ja".to_string());
+        let _ = build_metadata(&config, None);
+    }
+
+    #[test]
+    fn build_metadata_with_creator() {
+        let mut config = Config::default();
+        config.creator = Some("FulgurTest".to_string());
+        let _ = build_metadata(&config, None);
+    }
+
+    #[test]
+    fn build_metadata_with_valid_creation_date() {
+        // Exercises the `if let Some(dt) = parse_datetime(date_str)` true branch.
+        let mut config = Config::default();
+        config.creation_date = Some("2026-05-12T10:30:00".to_string());
+        let _ = build_metadata(&config, None);
+    }
+
+    #[test]
+    fn build_metadata_with_invalid_creation_date_does_not_panic() {
+        // parse_datetime returns None → the inner `if let Some(dt)` arm is skipped.
+        let mut config = Config::default();
+        config.creation_date = Some("not-a-date".to_string());
+        let _ = build_metadata(&config, None);
+    }
+
+    #[test]
+    fn build_metadata_all_optional_fields_set() {
+        let mut config = Config::default();
+        config.title = Some("Full Test Title".to_string());
+        config.authors = vec!["Author A".to_string()];
+        config.description = Some("Full description.".to_string());
+        config.keywords = vec!["key1".to_string(), "key2".to_string()];
+        config.lang = Some("en".to_string());
+        config.creator = Some("Creator App".to_string());
+        config.producer = Some("Fulgur PDF".to_string());
+        config.creation_date = Some("2026-01-01".to_string());
+        let _ = build_metadata(&config, None);
+    }
+
+    // --- paragraph_lines_for_page: inline-image computed_y rebasing ---
+
+    #[test]
+    fn paragraph_lines_for_page_split_rebases_inline_image_computed_y() {
+        // Two 12pt lines (each corresponds to a 16px CSS-px fragment).
+        // px_to_pt(16px) = 12pt (PX_TO_PT = 0.75).
+        // Line 1 contains an Image whose computed_y = 15.0 is paragraph-absolute.
+        // On page 1: consumed = px_to_pt(16px) = 12pt.
+        // After rebasing: img.computed_y = 15.0 − 12.0 = 3.0.
+        let img = crate::paragraph::InlineImage {
+            data: Arc::new(vec![]),
+            format: crate::image::ImageFormat::Png,
+            width: 10.0,
+            height: 8.0,
+            x_offset: 0.0,
+            vertical_align: crate::paragraph::VerticalAlign::Baseline,
+            opacity: 1.0,
+            visible: true,
+            computed_y: 15.0,
+            link: None,
+        };
+        let line0 = make_line(12.0, 9.0); // page 0: no items
+        let line1 = crate::paragraph::ShapedLine {
+            height: 12.0,
+            baseline: 21.0,
+            items: vec![crate::paragraph::LineItem::Image(img)],
+        };
+        let fragments = vec![
+            make_fragment(0, 16.0), // 16px → 12pt
+            make_fragment(1, 16.0),
+        ];
+        let result = paragraph_lines_for_page(&[line0, line1], &fragments, 1, true);
+        assert!(result.is_some(), "page 1 should yield Some");
+        let sliced = result.unwrap();
+        assert_eq!(sliced.len(), 1, "one line on page 1");
+        if let crate::paragraph::LineItem::Image(img) = &sliced[0].items[0] {
+            assert!(
+                (img.computed_y - 3.0).abs() < 0.01,
+                "expected computed_y=3.0 after rebasing, got {}",
+                img.computed_y,
+            );
+        } else {
+            panic!("expected Image item in sliced line");
+        }
+    }
+
+    // --- build_struct_tree: H run_entry with missing / empty paragraph ---
+
+    #[test]
+    fn build_struct_tree_run_entry_h_no_paragraph_no_backfill() {
+        // H node uses per-run tagging but has NO paragraph in drawables.
+        // The backfill loop's `if let Some(para)` arm yields None → silent skip.
+        let node_id: usize = 40;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(id),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_h1_semantic_entry(None));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1);
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
+
+    #[test]
+    fn build_struct_tree_run_entry_h_empty_title_no_backfill() {
+        // H node uses per-run tagging; paragraph exists but contains only an
+        // InlineBox (no Text runs). extract_heading_title returns "" →
+        // `if !title.is_empty()` is false → heading_titles entry is NOT inserted.
+        let node_id: usize = 41;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(id),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_h1_semantic_entry(None));
+        let ib = crate::paragraph::InlineBoxItem {
+            node_id: None,
+            width: 50.0,
+            height: 20.0,
+            x_offset: 0.0,
+            computed_y: 0.0,
+            link: None,
+            opacity: 1.0,
+            visible: true,
+        };
+        let line = crate::paragraph::ShapedLine {
+            height: 16.0,
+            baseline: 12.0,
+            items: vec![crate::paragraph::LineItem::InlineBox(ib)],
+        };
+        d.paragraphs.insert(node_id, make_para(vec![line]));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1);
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
+
+    // --- build_page_skip_sets: table overflow_clip with empty descendants ---
+
+    #[test]
+    fn build_page_skip_sets_table_overflow_clip_empty_descendants_not_added() {
+        // A table with has_overflow_clip() = true but clip_descendants empty must
+        // NOT extend clipped_descendants — the `&& !table.clip_descendants.is_empty()`
+        // guard short-circuits before `extend`.
+        let mut d = Drawables::new();
+        let style = crate::draw_primitives::BlockStyle {
+            overflow_x: crate::draw_primitives::Overflow::Clip,
+            ..Default::default()
+        };
+        d.tables.insert(
+            50,
+            crate::drawables::TableEntry {
+                style,
+                opacity: 1.0,
+                visible: true,
+                id: None,
+                layout_size: None,
+                width: 100.0,
+                cached_height: 50.0,
+                clip_descendants: vec![],
+            },
+        );
+        let (_, clip, _) = build_page_skip_sets(&d);
+        assert!(clip.is_empty(), "empty clip_descendants → nothing added");
+    }
 }
