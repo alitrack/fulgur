@@ -113,7 +113,7 @@ PASS  css/css-page/monolithic-overflow-022-print.html
 FAIL  css/css-page/monolithic-overflow-023-print.html  # page 1 diff: 33966/360000 pixels exceed tol (max_ch=255)
 FAIL  css/css-page/monolithic-overflow-024-print.html  # page 1 diff: 1877/10000 pixels exceed tol (max_ch=255)
 FAIL  css/css-page/monolithic-overflow-025-print.html  # page 1 diff: 1885/10000 pixels exceed tol (max_ch=255)
-PASS  css/css-page/monolithic-overflow-026-print.html
+FAIL  css/css-page/monolithic-overflow-026-print.html  # page count mismatch: test=1 ref=5 — nested in-flow `<div height:410vh>` inside `contain:size` ancestor needs nested in-flow slicing; fulgur-sbw2 only slices body-direct in-flow
 FAIL  css/css-page/monolithic-overflow-027-print.html  # page 1 diff: 181834/891662 pixels exceed tol (max_ch=255)
 FAIL  css/css-page/monolithic-overflow-028-print.html  # page 1 diff: 182217/891662 pixels exceed tol (max_ch=255)
 FAIL  css/css-page/monolithic-overflow-029-print.html  # page 1 diff: 182284/891662 pixels exceed tol (max_ch=255)
@@ -218,12 +218,12 @@ SKIP  css/css-page/page-rule-declarations-004.html  # NoMatch
 FAIL  css/css-page/page-rule-specificity-001-print.html  # page 1 diff: 1193/891662 pixels exceed tol (max_ch=255)
 FAIL  css/css-page/page-rule-specificity-002-print.html  # page 1 diff: 1193/891662 pixels exceed tol (max_ch=255)
 FAIL  css/css-page/page-rule-specificity-003-print.html  # page 1 diff: 891662/891662 pixels exceed tol (max_ch=255)
-PASS  css/css-page/page-size-001-print.html
+FAIL  css/css-page/page-size-001-print.html  # page count mismatch: test=3 ref=6 — ref-side 304px divs slice on fulgur's 20mm-default content area (= 198px) but the WPT assumes a 48px browser default margin; previously masked by whole-emit oversize fallback (fulgur-sbw2)
 PASS  css/css-page/page-size-002-print.html
 PASS  css/css-page/page-size-003-print.html
 FAIL  css/css-page/page-size-004-print.html  # page 1 diff: 5376/10000 pixels exceed tol (max_ch=255)
 FAIL  css/css-page/page-size-005-print.html  # page 1 diff: 35500/250000 pixels exceed tol (max_ch=255)
-PASS  css/css-page/page-size-006-print.html
+FAIL  css/css-page/page-size-006-print.html  # page count mismatch: test=5 ref=3 — `@page :first { margin-top: 100px }` and 8px body margin interact with multi-page divs; fulgur-sbw2 slicing now exposes underlying margin-config gap
 FAIL  css/css-page/page-size-007-print.html  # page count mismatch: test=4 ref=1
 FAIL  css/css-page/page-size-008-print.html  # page count mismatch: test=5 ref=1
 FAIL  css/css-page/page-size-009-print.html  # page count mismatch: test=2 ref=1
