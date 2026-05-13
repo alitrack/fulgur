@@ -205,8 +205,6 @@ All must pass with no new regressions in `target/wpt-report/css-page/regressions
 
 ## Findings
 
-(Populated during Task 1.)
-
-- Breaking commit: _TBD_
-- One-line cause: _TBD_
-- Fix location: _TBD_
+- **Not a regression in the strict sense** — `<div style="height:300vh">` always rendered as 1 page since at least commit `3d39f1f3` (when the WPT expectation for `fixedpos-003-print` was promoted to PASS — both test and ref happened to render 1 page, masking the in-flow gap). The "regression" message in beads/discussion was misdescribed.
+- **One-line cause**: `fragment_pagination_root`'s recursion gate (`pagination_layout.rs:833-849`) measures *descendant* overflow via `would_split_block_subtree` — a body-direct child whose own CSS height exceeds `page_height_px` but whose descendants all fit (`<div height:300vh>x</div>`) falls through to the whole-emit path and lands as one oversized fragment on one page.
+- **Fix location**: insertion at `crates/fulgur/src/pagination_layout.rs` between the recursion gate's fallthrough (post-line 891) and the whole-emit (pre-line 902). Slices the child into one fragment per page strip with page-local `y`, advancing `page_index` accordingly. `PaginationGeometry::is_split()` flips automatically once `fragments.len() > 1`, and `render.rs` already honours the per-slice height. Atomic boxes (CSS `transform`) opt out; `contain: size` does *not* (WPT `monolithic-overflow-022-print` expects it to span 4 pages).

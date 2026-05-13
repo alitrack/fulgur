@@ -32,10 +32,7 @@ fn in_flow_300vh_paginates_to_three_pages() {
 <body style="margin:0">
 <div style="height:300vh">x</div>
 </body>"#;
-    let pdf = Engine::builder()
-        .build()
-        .render_html(html)
-        .expect("render");
+    let pdf = Engine::builder().build().render_html(html).expect("render");
     let pages = page_count(&pdf);
     assert_eq!(pages, 3, "expected 3 pages, got {pages}");
 }
