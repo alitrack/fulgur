@@ -4184,4 +4184,594 @@ mod tests {
             "child should be a Link Group"
         );
     }
+
+    // --- para_has_link_runs ---
+
+    fn make_text_run_with_link(
+        link: Option<std::sync::Arc<crate::paragraph::LinkSpan>>,
+    ) -> crate::paragraph::LineItem {
+        crate::paragraph::LineItem::Text(crate::paragraph::ShapedGlyphRun {
+            font_data: std::sync::Arc::new(vec![]),
+            font_index: 0,
+            font_size: 12.0,
+            color: [0, 0, 0, 255],
+            decoration: crate::paragraph::TextDecoration::default(),
+            glyphs: vec![],
+            text: "word".to_string(),
+            x_offset: 0.0,
+            link,
+        })
+    }
+
+    fn make_image_item_with_link(
+        link: Option<std::sync::Arc<crate::paragraph::LinkSpan>>,
+    ) -> crate::paragraph::LineItem {
+        crate::paragraph::LineItem::Image(crate::paragraph::InlineImage {
+            data: std::sync::Arc::new(vec![]),
+            format: crate::image::ImageFormat::Png,
+            width: 10.0,
+            height: 10.0,
+            x_offset: 0.0,
+            vertical_align: crate::paragraph::VerticalAlign::Baseline,
+            opacity: 1.0,
+            visible: true,
+            computed_y: 0.0,
+            link,
+        })
+    }
+
+    fn make_link_span() -> std::sync::Arc<crate::paragraph::LinkSpan> {
+        std::sync::Arc::new(crate::paragraph::LinkSpan {
+            target: crate::paragraph::LinkTarget::External(std::sync::Arc::new(
+                "https://example.com".to_string(),
+            )),
+            alt_text: None,
+        })
+    }
+
+    fn make_para_entry(
+        lines: Vec<crate::paragraph::ShapedLine>,
+    ) -> crate::drawables::ParagraphEntry {
+        crate::drawables::ParagraphEntry {
+            lines,
+            opacity: 1.0,
+            visible: true,
+            id: None,
+        }
+    }
+
+    fn make_shaped_line(items: Vec<crate::paragraph::LineItem>) -> crate::paragraph::ShapedLine {
+        crate::paragraph::ShapedLine {
+            height: 12.0,
+            baseline: 9.0,
+            items,
+        }
+    }
+
+    #[test]
+    fn para_has_link_runs_empty_paragraph_returns_false() {
+        let entry = make_para_entry(vec![]);
+        assert!(!para_has_link_runs(&entry));
+    }
+
+    #[test]
+    fn para_has_link_runs_text_without_link_returns_false() {
+        let entry = make_para_entry(vec![make_shaped_line(vec![make_text_run_with_link(None)])]);
+        assert!(!para_has_link_runs(&entry));
+    }
+
+    #[test]
+    fn para_has_link_runs_text_with_link_returns_true() {
+        let entry = make_para_entry(vec![make_shaped_line(vec![make_text_run_with_link(Some(
+            make_link_span(),
+        ))])]);
+        assert!(para_has_link_runs(&entry));
+    }
+
+    #[test]
+    fn para_has_link_runs_image_without_link_returns_false() {
+        let entry = make_para_entry(vec![make_shaped_line(vec![make_image_item_with_link(
+            None,
+        )])]);
+        assert!(!para_has_link_runs(&entry));
+    }
+
+    #[test]
+    fn para_has_link_runs_image_with_link_returns_true() {
+        let entry = make_para_entry(vec![make_shaped_line(vec![make_image_item_with_link(
+            Some(make_link_span()),
+        )])]);
+        assert!(para_has_link_runs(&entry));
+    }
+
+    #[test]
+    fn para_has_link_runs_inline_box_returns_false() {
+        let ib = crate::paragraph::LineItem::InlineBox(crate::paragraph::InlineBoxItem {
+            node_id: None,
+            width: 10.0,
+            height: 10.0,
+            x_offset: 0.0,
+            computed_y: 0.0,
+            link: None,
+            opacity: 1.0,
+            visible: true,
+        });
+        let entry = make_para_entry(vec![make_shaped_line(vec![ib])]);
+        assert!(!para_has_link_runs(&entry));
+    }
+
+    #[test]
+    fn para_has_link_runs_link_in_second_line_returns_true() {
+        let entry = make_para_entry(vec![
+            make_shaped_line(vec![make_text_run_with_link(None)]),
+            make_shaped_line(vec![make_text_run_with_link(Some(make_link_span()))]),
+        ]);
+        assert!(para_has_link_runs(&entry));
+    }
+
+    // --- extract_heading_title ---
+
+    #[test]
+    fn extract_heading_title_empty_paragraph_returns_empty() {
+        let entry = make_para_entry(vec![]);
+        assert_eq!(extract_heading_title(&entry), "");
+    }
+
+    #[test]
+    fn extract_heading_title_single_text_run() {
+        let run = crate::paragraph::LineItem::Text(crate::paragraph::ShapedGlyphRun {
+            font_data: std::sync::Arc::new(vec![]),
+            font_index: 0,
+            font_size: 12.0,
+            color: [0, 0, 0, 255],
+            decoration: crate::paragraph::TextDecoration::default(),
+            glyphs: vec![],
+            text: "Hello".to_string(),
+            x_offset: 0.0,
+            link: None,
+        });
+        let entry = make_para_entry(vec![make_shaped_line(vec![run])]);
+        assert_eq!(extract_heading_title(&entry), "Hello");
+    }
+
+    #[test]
+    fn extract_heading_title_multiple_runs_concatenated() {
+        let make_run = |text: &str| {
+            crate::paragraph::LineItem::Text(crate::paragraph::ShapedGlyphRun {
+                font_data: std::sync::Arc::new(vec![]),
+                font_index: 0,
+                font_size: 12.0,
+                color: [0, 0, 0, 255],
+                decoration: crate::paragraph::TextDecoration::default(),
+                glyphs: vec![],
+                text: text.to_string(),
+                x_offset: 0.0,
+                link: None,
+            })
+        };
+        let entry = make_para_entry(vec![
+            make_shaped_line(vec![make_run("Foo")]),
+            make_shaped_line(vec![make_run("Bar")]),
+        ]);
+        assert_eq!(extract_heading_title(&entry), "FooBar");
+    }
+
+    #[test]
+    fn extract_heading_title_skips_image_items() {
+        let entry = make_para_entry(vec![make_shaped_line(vec![make_image_item_with_link(
+            None,
+        )])]);
+        assert_eq!(extract_heading_title(&entry), "");
+    }
+
+    #[test]
+    fn extract_heading_title_skips_inline_box_items() {
+        let ib = crate::paragraph::LineItem::InlineBox(crate::paragraph::InlineBoxItem {
+            node_id: None,
+            width: 10.0,
+            height: 10.0,
+            x_offset: 0.0,
+            computed_y: 0.0,
+            link: None,
+            opacity: 1.0,
+            visible: true,
+        });
+        let entry = make_para_entry(vec![make_shaped_line(vec![ib])]);
+        assert_eq!(extract_heading_title(&entry), "");
+    }
+
+    #[test]
+    fn extract_heading_title_text_and_image_only_text_returned() {
+        let text_run = crate::paragraph::LineItem::Text(crate::paragraph::ShapedGlyphRun {
+            font_data: std::sync::Arc::new(vec![]),
+            font_index: 0,
+            font_size: 12.0,
+            color: [0, 0, 0, 255],
+            decoration: crate::paragraph::TextDecoration::default(),
+            glyphs: vec![],
+            text: "Title".to_string(),
+            x_offset: 0.0,
+            link: None,
+        });
+        let entry = make_para_entry(vec![make_shaped_line(vec![
+            text_run,
+            make_image_item_with_link(None),
+        ])]);
+        assert_eq!(extract_heading_title(&entry), "Title");
+    }
+
+    // --- build_multicol_stroke ---
+
+    #[test]
+    fn build_multicol_stroke_zero_width_returns_none() {
+        use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+        let rule = ColumnRuleSpec {
+            width: 0.0,
+            style: ColumnRuleStyle::Solid,
+            color: [0, 0, 0, 255],
+        };
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_negative_width_returns_none() {
+        use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+        let rule = ColumnRuleSpec {
+            width: -1.0,
+            style: ColumnRuleStyle::Solid,
+            color: [0, 0, 0, 255],
+        };
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_style_none_returns_none() {
+        use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+        let rule = ColumnRuleSpec {
+            width: 2.0,
+            style: ColumnRuleStyle::None,
+            color: [0, 0, 0, 255],
+        };
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_solid_propagates_width() {
+        use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+        let rule = ColumnRuleSpec {
+            width: 3.5,
+            style: ColumnRuleStyle::Solid,
+            color: [0, 0, 0, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).unwrap();
+        assert!((stroke.width - 3.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn build_multicol_stroke_solid_has_no_dash() {
+        use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+        let rule = ColumnRuleSpec {
+            width: 2.0,
+            style: ColumnRuleStyle::Solid,
+            color: [0, 0, 0, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).unwrap();
+        assert!(stroke.dash.is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_solid_has_butt_line_cap() {
+        use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+        let rule = ColumnRuleSpec {
+            width: 1.0,
+            style: ColumnRuleStyle::Solid,
+            color: [0, 0, 0, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).unwrap();
+        assert_eq!(stroke.line_cap, krilla::paint::LineCap::Butt);
+    }
+
+    #[test]
+    fn build_multicol_stroke_dashed_has_correct_dash_array() {
+        use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+        let w = 4.0_f32;
+        let rule = ColumnRuleSpec {
+            width: w,
+            style: ColumnRuleStyle::Dashed,
+            color: [0, 0, 0, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).unwrap();
+        let dash = stroke.dash.expect("dashed stroke must have dash");
+        assert_eq!(dash.array.len(), 2);
+        assert!(
+            (dash.array[0] - w * 3.0).abs() < 0.001 && (dash.array[1] - w * 2.0).abs() < 0.001,
+            "expected [{}, {}], got {:?}",
+            w * 3.0,
+            w * 2.0,
+            dash.array
+        );
+    }
+
+    #[test]
+    fn build_multicol_stroke_dashed_offset_is_zero() {
+        use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+        let rule = ColumnRuleSpec {
+            width: 2.0,
+            style: ColumnRuleStyle::Dashed,
+            color: [0, 0, 0, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).unwrap();
+        assert_eq!(stroke.dash.unwrap().offset, 0.0);
+    }
+
+    #[test]
+    fn build_multicol_stroke_dotted_has_round_line_cap() {
+        use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+        let rule = ColumnRuleSpec {
+            width: 2.0,
+            style: ColumnRuleStyle::Dotted,
+            color: [0, 0, 0, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).unwrap();
+        assert_eq!(stroke.line_cap, krilla::paint::LineCap::Round);
+    }
+
+    #[test]
+    fn build_multicol_stroke_dotted_has_correct_dash_array() {
+        use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+        let w = 3.0_f32;
+        let rule = ColumnRuleSpec {
+            width: w,
+            style: ColumnRuleStyle::Dotted,
+            color: [0, 0, 0, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).unwrap();
+        let dash = stroke.dash.expect("dotted stroke must have dash");
+        assert_eq!(dash.array.len(), 2);
+        assert!(
+            (dash.array[0] - 0.0).abs() < 0.001 && (dash.array[1] - w * 2.0).abs() < 0.001,
+            "expected [0.0, {}], got {:?}",
+            w * 2.0,
+            dash.array
+        );
+    }
+
+    #[test]
+    fn build_multicol_stroke_dotted_offset_is_zero() {
+        use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+        let rule = ColumnRuleSpec {
+            width: 2.0,
+            style: ColumnRuleStyle::Dotted,
+            color: [0, 0, 0, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).unwrap();
+        assert_eq!(stroke.dash.unwrap().offset, 0.0);
+    }
+
+    // --- decode_image_for_v2 ---
+
+    #[test]
+    fn decode_image_for_v2_invalid_png_returns_none() {
+        let entry = crate::drawables::ImageEntry {
+            image_data: std::sync::Arc::new(b"not a png".to_vec()),
+            format: crate::image::ImageFormat::Png,
+            width: 10.0,
+            height: 10.0,
+            opacity: 1.0,
+            visible: true,
+        };
+        assert!(decode_image_for_v2(&entry).is_none());
+    }
+
+    #[test]
+    fn decode_image_for_v2_invalid_jpeg_returns_none() {
+        let entry = crate::drawables::ImageEntry {
+            image_data: std::sync::Arc::new(b"not a jpeg".to_vec()),
+            format: crate::image::ImageFormat::Jpeg,
+            width: 10.0,
+            height: 10.0,
+            opacity: 1.0,
+            visible: true,
+        };
+        assert!(decode_image_for_v2(&entry).is_none());
+    }
+
+    #[test]
+    fn decode_image_for_v2_invalid_gif_returns_none() {
+        let entry = crate::drawables::ImageEntry {
+            image_data: std::sync::Arc::new(b"not a gif".to_vec()),
+            format: crate::image::ImageFormat::Gif,
+            width: 10.0,
+            height: 10.0,
+            opacity: 1.0,
+            visible: true,
+        };
+        assert!(decode_image_for_v2(&entry).is_none());
+    }
+
+    // --- paragraph_lines_for_page: split path ---
+
+    fn make_fragment(page_index: u32, height_px: f32) -> crate::pagination_layout::Fragment {
+        crate::pagination_layout::Fragment {
+            page_index,
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: height_px,
+        }
+    }
+
+    // PX_TO_PT = 0.75, so 40px = 30pt.
+    const FRAG_H_PX: f32 = 40.0; // one-page fragment height in CSS px
+    const LINE_H_PT: f32 = 30.0; // matching line height in PDF pt (= FRAG_H_PX * 0.75)
+
+    #[test]
+    fn paragraph_lines_for_page_split_no_matching_fragment_returns_none() {
+        let lines = vec![make_shaped_line(vec![]), make_shaped_line(vec![])];
+        let frags = vec![make_fragment(0, FRAG_H_PX)];
+        assert!(paragraph_lines_for_page(&lines, &frags, 1, true).is_none());
+    }
+
+    #[test]
+    fn paragraph_lines_for_page_split_first_page_returns_first_lines() {
+        let line0 = crate::paragraph::ShapedLine {
+            height: LINE_H_PT,
+            baseline: 20.0,
+            items: vec![],
+        };
+        let line1 = crate::paragraph::ShapedLine {
+            height: LINE_H_PT,
+            baseline: 50.0,
+            items: vec![],
+        };
+        let frags = vec![make_fragment(0, FRAG_H_PX), make_fragment(1, FRAG_H_PX)];
+        let result = paragraph_lines_for_page(&[line0, line1], &frags, 0, true).unwrap();
+        assert_eq!(result.len(), 1, "page 0 should yield one line");
+        // Baseline of page-0 line is rebased by consumed=0: unchanged.
+        assert!(
+            (result[0].baseline - 20.0).abs() < 0.001,
+            "got {}",
+            result[0].baseline
+        );
+    }
+
+    #[test]
+    fn paragraph_lines_for_page_split_second_page_returns_second_line() {
+        let line0 = crate::paragraph::ShapedLine {
+            height: LINE_H_PT,
+            baseline: 20.0,
+            items: vec![],
+        };
+        let line1 = crate::paragraph::ShapedLine {
+            height: LINE_H_PT,
+            baseline: 50.0,
+            items: vec![],
+        };
+        let frags = vec![make_fragment(0, FRAG_H_PX), make_fragment(1, FRAG_H_PX)];
+        let result = paragraph_lines_for_page(&[line0, line1], &frags, 1, true).unwrap();
+        assert_eq!(result.len(), 1, "page 1 should yield one line");
+        // Baseline is rebased by consumed=LINE_H_PT: 50 - 30 = 20.
+        assert!(
+            (result[0].baseline - (50.0 - LINE_H_PT)).abs() < 0.001,
+            "got {}",
+            result[0].baseline
+        );
+    }
+
+    #[test]
+    fn paragraph_lines_for_page_split_rebases_image_computed_y() {
+        // Line 1 (on page 1) contains an image whose computed_y is paragraph-absolute.
+        // After slicing for page 1, computed_y must be rebased by consumed=LINE_H_PT.
+        let image_computed_y = LINE_H_PT + 5.0; // sits on page 1 (past the page 0 boundary)
+        let image_item = crate::paragraph::LineItem::Image(crate::paragraph::InlineImage {
+            data: std::sync::Arc::new(vec![]),
+            format: crate::image::ImageFormat::Png,
+            width: 8.0,
+            height: 8.0,
+            x_offset: 0.0,
+            vertical_align: crate::paragraph::VerticalAlign::Baseline,
+            opacity: 1.0,
+            visible: true,
+            computed_y: image_computed_y,
+            link: None,
+        });
+        let line0 = crate::paragraph::ShapedLine {
+            height: LINE_H_PT,
+            baseline: 20.0,
+            items: vec![],
+        };
+        let line1 = crate::paragraph::ShapedLine {
+            height: LINE_H_PT,
+            baseline: 50.0,
+            items: vec![image_item],
+        };
+        let frags = vec![make_fragment(0, FRAG_H_PX), make_fragment(1, FRAG_H_PX)];
+        let result = paragraph_lines_for_page(&[line0, line1], &frags, 1, true).unwrap();
+        assert_eq!(result.len(), 1);
+        let crate::paragraph::LineItem::Image(rebased_img) = &result[0].items[0] else {
+            panic!("expected Image item");
+        };
+        let expected_y = image_computed_y - LINE_H_PT;
+        assert!(
+            (rebased_img.computed_y - expected_y).abs() < 0.001,
+            "expected computed_y={}, got {}",
+            expected_y,
+            rebased_img.computed_y
+        );
+    }
+
+    #[test]
+    fn paragraph_lines_for_page_split_empty_range_returns_none() {
+        // Two fragments but lines are taller than target_h — end_idx stays at start_idx.
+        // Use a very small fragment height so target_h=0.75pt, but lines are 30pt tall.
+        let line = crate::paragraph::ShapedLine {
+            height: LINE_H_PT,
+            baseline: 10.0,
+            items: vec![],
+        };
+        let frags = vec![
+            make_fragment(0, FRAG_H_PX),
+            make_fragment(1, 1.0), // 1px = 0.75pt — lines won't fit
+        ];
+        let result = paragraph_lines_for_page(&[line.clone(), line], &frags, 1, true);
+        // With target_h=0.75 and lines of height 30, no line fits: end_idx <= start_idx → None.
+        assert!(result.is_none());
+    }
+
+    // --- build_page_skip_sets: table branch ---
+
+    #[test]
+    fn build_page_skip_sets_table_with_overflow_clip_collects_descendants() {
+        use crate::draw_primitives::{BlockStyle, Overflow};
+
+        let mut style = BlockStyle::default();
+        style.overflow_x = Overflow::Clip;
+
+        let mut drawables = Drawables::new();
+        drawables.tables.insert(
+            10,
+            crate::drawables::TableEntry {
+                style,
+                opacity: 1.0,
+                visible: true,
+                id: None,
+                layout_size: None,
+                width: 100.0,
+                cached_height: 50.0,
+                clip_descendants: vec![20, 30],
+            },
+        );
+
+        let (_, clipped, _) = build_page_skip_sets(&drawables);
+        assert!(clipped.contains(&20), "descendant 20 should be clipped");
+        assert!(clipped.contains(&30), "descendant 30 should be clipped");
+    }
+
+    #[test]
+    fn build_page_skip_sets_table_without_clip_does_not_collect() {
+        use crate::draw_primitives::BlockStyle;
+
+        let style = BlockStyle::default(); // overflow_x = Visible by default
+
+        let mut drawables = Drawables::new();
+        drawables.tables.insert(
+            10,
+            crate::drawables::TableEntry {
+                style,
+                opacity: 1.0,
+                visible: true,
+                id: None,
+                layout_size: None,
+                width: 100.0,
+                cached_height: 50.0,
+                clip_descendants: vec![20, 30],
+            },
+        );
+
+        let (_, clipped, _) = build_page_skip_sets(&drawables);
+        assert!(
+            !clipped.contains(&20),
+            "non-clipping table should not contribute descendants"
+        );
+    }
 }
