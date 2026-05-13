@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.16.0] - 2026-05-13
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+### Features
+* feat(cli): git-style plugin dispatch (PATH lookup, fulgur plugins) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/418
+### Bug Fixes
+* fix(wpt): preserve break-before top margin by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/408
+* fix(multicol): keep generic inline-root blocks atomic by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/410
+### Other Changes
+* Fix fixedpos absolute bottom page stride by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/406
+
+
+**Full Changelog**: https://github.com/fulgur-rs/fulgur/compare/v0.15.0...v0.16.0
+
 ## [0.15.0] - 2026-05-08
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
