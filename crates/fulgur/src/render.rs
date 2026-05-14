@@ -5199,4 +5199,209 @@ mod tests {
         let (_, clip, _) = build_page_skip_sets(&d);
         assert!(clip.is_empty(), "empty clip_descendants → nothing added");
     }
+
+    // --- build_multicol_stroke ---
+
+    use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+
+    fn solid_rule(width: f32) -> ColumnRuleSpec {
+        ColumnRuleSpec {
+            width,
+            style: ColumnRuleStyle::Solid,
+            color: [0, 0, 0, 255],
+        }
+    }
+
+    #[test]
+    fn build_multicol_stroke_zero_width_returns_none() {
+        let rule = ColumnRuleSpec {
+            width: 0.0,
+            style: ColumnRuleStyle::Solid,
+            color: [0, 0, 0, 255],
+        };
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_negative_width_returns_none() {
+        let rule = ColumnRuleSpec {
+            width: -1.0,
+            style: ColumnRuleStyle::Solid,
+            color: [0, 0, 0, 255],
+        };
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_none_style_positive_width_returns_none() {
+        let rule = ColumnRuleSpec {
+            width: 2.0,
+            style: ColumnRuleStyle::None,
+            color: [0, 0, 0, 255],
+        };
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_solid_style_returns_some_with_matching_width() {
+        let rule = solid_rule(3.0);
+        let stroke = build_multicol_stroke(&rule).expect("solid rule with positive width");
+        assert!((stroke.width - 3.0).abs() < 1e-5, "width={}", stroke.width);
+        assert!(
+            stroke.dash.is_none(),
+            "solid rule must not have a dash pattern"
+        );
+    }
+
+    #[test]
+    fn build_multicol_stroke_dashed_style_has_dash_array() {
+        let rule = ColumnRuleSpec {
+            width: 2.0,
+            style: ColumnRuleStyle::Dashed,
+            color: [128, 64, 32, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).expect("dashed rule with positive width");
+        assert!((stroke.width - 2.0).abs() < 1e-5, "width={}", stroke.width);
+        let dash = stroke.dash.expect("dashed rule must have a dash pattern");
+        // array is [w*3.0, w*2.0] = [6.0, 4.0] for w=2
+        assert_eq!(dash.array.len(), 2);
+        assert!(
+            (dash.array[0] - 6.0).abs() < 1e-5,
+            "dash on={}",
+            dash.array[0]
+        );
+        assert!(
+            (dash.array[1] - 4.0).abs() < 1e-5,
+            "dash off={}",
+            dash.array[1]
+        );
+    }
+
+    #[test]
+    fn build_multicol_stroke_dotted_style_has_round_cap_and_dot_spacing() {
+        let rule = ColumnRuleSpec {
+            width: 4.0,
+            style: ColumnRuleStyle::Dotted,
+            color: [0, 128, 255, 200],
+        };
+        let stroke = build_multicol_stroke(&rule).expect("dotted rule with positive width");
+        assert!(
+            matches!(stroke.line_cap, krilla::paint::LineCap::Round),
+            "dotted rule must have Round line cap"
+        );
+        let dash = stroke.dash.expect("dotted rule must have a dash pattern");
+        // array is [0.0, w*2.0] = [0.0, 8.0] for w=4
+        assert_eq!(dash.array.len(), 2);
+        assert!(
+            (dash.array[0] - 0.0).abs() < 1e-5,
+            "dot on={}",
+            dash.array[0]
+        );
+        assert!(
+            (dash.array[1] - 8.0).abs() < 1e-5,
+            "dot off={}",
+            dash.array[1]
+        );
+    }
+
+    // --- build_tag_group: identifiers path and children_map recursion ---
+
+    #[test]
+    fn build_tag_group_identifiers_path_produces_leaf_children() {
+        // When `run_entries` has no entry for node_id, the else-if `identifiers`
+        // branch should fire and push one Leaf per identifier.
+        let node_id: crate::drawables::NodeId = 10;
+        let id1 = make_identifier();
+        let id2 = make_identifier();
+
+        let mut d = Drawables::new();
+        d.semantics.insert(
+            node_id,
+            crate::tagging::SemanticEntry {
+                tag: crate::tagging::PdfTag::P,
+                parent: None,
+                alt_text: None,
+            },
+        );
+
+        let mut identifiers: BTreeMap<crate::drawables::NodeId, Vec<Identifier>> = BTreeMap::new();
+        identifiers.insert(node_id, vec![id1, id2]);
+
+        let run_entries: BTreeMap<
+            crate::drawables::NodeId,
+            Vec<crate::draw_primitives::ParagraphRunItem>,
+        > = BTreeMap::new();
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let heading_titles: BTreeMap<crate::drawables::NodeId, String> = BTreeMap::new();
+        let children_map: BTreeMap<crate::drawables::NodeId, Vec<crate::drawables::NodeId>> =
+            BTreeMap::new();
+
+        let group = build_tag_group(
+            node_id,
+            &d,
+            &identifiers,
+            &heading_titles,
+            &children_map,
+            &run_entries,
+            &link_annot_ids,
+        );
+
+        assert_eq!(group.children.len(), 2, "should have two Leaf children");
+        assert!(matches!(group.children[0], Node::Leaf(_)));
+        assert!(matches!(group.children[1], Node::Leaf(_)));
+    }
+
+    #[test]
+    fn build_tag_group_children_map_recurses_into_child_nodes() {
+        // When `children_map` has an entry for node_id, build_tag_group should
+        // recurse into each child and push a Group for it.
+        let parent_id: crate::drawables::NodeId = 20;
+        let child_id: crate::drawables::NodeId = 21;
+
+        let mut d = Drawables::new();
+        d.semantics.insert(
+            parent_id,
+            crate::tagging::SemanticEntry {
+                tag: crate::tagging::PdfTag::P,
+                parent: None,
+                alt_text: None,
+            },
+        );
+        d.semantics.insert(
+            child_id,
+            crate::tagging::SemanticEntry {
+                tag: crate::tagging::PdfTag::Span,
+                parent: Some(parent_id),
+                alt_text: None,
+            },
+        );
+
+        let identifiers: BTreeMap<crate::drawables::NodeId, Vec<Identifier>> = BTreeMap::new();
+        let run_entries: BTreeMap<
+            crate::drawables::NodeId,
+            Vec<crate::draw_primitives::ParagraphRunItem>,
+        > = BTreeMap::new();
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let heading_titles: BTreeMap<crate::drawables::NodeId, String> = BTreeMap::new();
+        let mut children_map: BTreeMap<crate::drawables::NodeId, Vec<crate::drawables::NodeId>> =
+            BTreeMap::new();
+        children_map.insert(parent_id, vec![child_id]);
+
+        let group = build_tag_group(
+            parent_id,
+            &d,
+            &identifiers,
+            &heading_titles,
+            &children_map,
+            &run_entries,
+            &link_annot_ids,
+        );
+
+        // The parent group must contain one Group child (for child_id).
+        assert_eq!(group.children.len(), 1, "expected one Group child");
+        assert!(
+            matches!(group.children[0], Node::Group(_)),
+            "child must be a Group (recursed)"
+        );
+    }
 }
