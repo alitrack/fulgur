@@ -5199,4 +5199,249 @@ mod tests {
         let (_, clip, _) = build_page_skip_sets(&d);
         assert!(clip.is_empty(), "empty clip_descendants → nothing added");
     }
+
+    // --- build_struct_tree: uncovered branches in the run_entries backfill loop ---
+
+    #[test]
+    fn build_struct_tree_run_entry_non_h_tag_does_not_backfill_title() {
+        // A P node uses per-run tagging. The `matches!(entry.tag, PdfTag::H { .. })`
+        // guard in the backfill loop evaluates to false → no title is inserted,
+        // even though a paragraph with text is present.
+        let node_id: usize = 70;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(id),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_p_semantic_entry(None));
+        let text_line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "should not become a title",
+            None,
+        ))]);
+        d.paragraphs.insert(node_id, make_para(vec![text_line]));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "one root Group for the P node");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
+
+    #[test]
+    fn build_struct_tree_run_entry_already_in_heading_titles_skips_backfill() {
+        // A node recorded via both tc.record (which populates heading_titles) and
+        // tc.record_run (which populates run_entries). The backfill loop detects
+        // `heading_titles.contains_key(&node_id)` → true → `continue`, leaving the
+        // original heading title intact.
+        let node_id: usize = 71;
+        let tc_id = make_identifier();
+        let run_id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record(
+            node_id,
+            crate::tagging::PdfTag::H { level: 1 },
+            tc_id,
+            Some("original title".to_string()),
+        );
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(run_id),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_h1_semantic_entry(None));
+        let text_line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "replacement that should be ignored",
+            None,
+        ))]);
+        d.paragraphs.insert(node_id, make_para(vec![text_line]));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "one root Group for the H node");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
+
+    #[test]
+    fn build_struct_tree_run_entry_without_semantic_entry_skips_silently() {
+        // A node in run_entries has no entry in drawables.semantics.
+        // The backfill loop's `drawables.semantics.get(&node_id)` returns None →
+        // the node is silently ignored. Since it is also not a semantic root, the
+        // tree stays empty.
+        let node_id: usize = 72;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(id),
+        );
+        let d = Drawables::new(); // no semantic entry for node_id
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert!(
+            tree.children.is_empty(),
+            "run_entry with no semantic entry should produce no tree nodes"
+        );
+    }
+
+    // --- build_tag_group: while-loop continuation and multiple OBJR identifiers ---
+
+    #[test]
+    fn build_tag_group_two_consecutive_link_items_same_ptr_merged_into_one_link_group() {
+        // Two consecutive LinkContent items with the same span_ptr are consumed by
+        // the inner while-loop in a single pass, producing one Link Group that
+        // contains two Leaf children rather than two separate Link Groups.
+        let node_id: crate::drawables::NodeId = 80;
+        let id1 = make_identifier();
+        let id2 = make_identifier();
+
+        let mut run_entries: BTreeMap<
+            crate::drawables::NodeId,
+            Vec<crate::draw_primitives::ParagraphRunItem>,
+        > = BTreeMap::new();
+        run_entries.insert(
+            node_id,
+            vec![
+                crate::draw_primitives::ParagraphRunItem::LinkContent {
+                    span_ptr: 55,
+                    identifier: id1,
+                },
+                crate::draw_primitives::ParagraphRunItem::LinkContent {
+                    span_ptr: 55,
+                    identifier: id2,
+                },
+            ],
+        );
+
+        let drawables = drawables_with_para(node_id);
+        let identifiers: BTreeMap<crate::drawables::NodeId, Vec<Identifier>> = BTreeMap::new();
+        let heading_titles: BTreeMap<crate::drawables::NodeId, String> = BTreeMap::new();
+        let children_map: BTreeMap<crate::drawables::NodeId, Vec<crate::drawables::NodeId>> =
+            BTreeMap::new();
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+
+        let group = build_tag_group(
+            node_id,
+            &drawables,
+            &identifiers,
+            &heading_titles,
+            &children_map,
+            &run_entries,
+            &link_annot_ids,
+        );
+
+        assert_eq!(
+            group.children.len(),
+            1,
+            "two consecutive same-ptr items → one Link Group"
+        );
+        assert!(
+            matches!(group.children[0], Node::Group(_)),
+            "child should be a Link Group"
+        );
+        if let Node::Group(ref link_group) = group.children[0] {
+            assert_eq!(
+                link_group.children.len(),
+                2,
+                "both LinkContent leaves should be inside the same Link Group"
+            );
+        }
+    }
+
+    #[test]
+    fn build_tag_group_link_with_two_annot_ids_appended_as_objr_leaves() {
+        // A link that spans two pages produces two annotation identifiers. Both
+        // are appended as OBJR Leaf nodes after the content leaf, so the Link
+        // Group contains 1 content leaf + 2 OBJR leaves = 3 children total.
+        let node_id: crate::drawables::NodeId = 81;
+        let content_id = make_identifier();
+        let annot1 = make_identifier();
+        let annot2 = make_identifier();
+
+        let mut run_entries: BTreeMap<
+            crate::drawables::NodeId,
+            Vec<crate::draw_primitives::ParagraphRunItem>,
+        > = BTreeMap::new();
+        run_entries.insert(
+            node_id,
+            vec![crate::draw_primitives::ParagraphRunItem::LinkContent {
+                span_ptr: 66,
+                identifier: content_id,
+            }],
+        );
+
+        let mut link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        link_annot_ids.entry(66).or_default().push(annot1);
+        link_annot_ids.entry(66).or_default().push(annot2);
+
+        let drawables = drawables_with_para(node_id);
+        let identifiers: BTreeMap<crate::drawables::NodeId, Vec<Identifier>> = BTreeMap::new();
+        let heading_titles: BTreeMap<crate::drawables::NodeId, String> = BTreeMap::new();
+        let children_map: BTreeMap<crate::drawables::NodeId, Vec<crate::drawables::NodeId>> =
+            BTreeMap::new();
+
+        let group = build_tag_group(
+            node_id,
+            &drawables,
+            &identifiers,
+            &heading_titles,
+            &children_map,
+            &run_entries,
+            &link_annot_ids,
+        );
+
+        assert_eq!(group.children.len(), 1, "one Link Group");
+        if let Node::Group(ref link_group) = group.children[0] {
+            assert_eq!(
+                link_group.children.len(),
+                3,
+                "1 content leaf + 2 OBJR leaves for the cross-page link"
+            );
+        } else {
+            panic!("expected Link Group as first child");
+        }
+    }
+
+    #[test]
+    fn build_tag_group_node_with_multiple_identifiers_produces_multiple_leaf_nodes() {
+        // A node spanning two pages is recorded twice via tc.record, resulting in
+        // two entries in identifiers[node_id]. The `else if` branch in build_tag_group
+        // iterates both and pushes two Leaf nodes into the Group.
+        let node_id: crate::drawables::NodeId = 82;
+        let id1 = make_identifier();
+        let id2 = make_identifier();
+
+        let mut identifiers: BTreeMap<crate::drawables::NodeId, Vec<Identifier>> = BTreeMap::new();
+        identifiers.entry(node_id).or_default().push(id1);
+        identifiers.entry(node_id).or_default().push(id2);
+
+        let drawables = drawables_with_para(node_id);
+        let run_entries: BTreeMap<
+            crate::drawables::NodeId,
+            Vec<crate::draw_primitives::ParagraphRunItem>,
+        > = BTreeMap::new();
+        let heading_titles: BTreeMap<crate::drawables::NodeId, String> = BTreeMap::new();
+        let children_map: BTreeMap<crate::drawables::NodeId, Vec<crate::drawables::NodeId>> =
+            BTreeMap::new();
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+
+        let group = build_tag_group(
+            node_id,
+            &drawables,
+            &identifiers,
+            &heading_titles,
+            &children_map,
+            &run_entries,
+            &link_annot_ids,
+        );
+
+        assert_eq!(
+            group.children.len(),
+            2,
+            "two identifiers → two Leaf nodes in the Group"
+        );
+        assert!(matches!(group.children[0], Node::Leaf(_)));
+        assert!(matches!(group.children[1], Node::Leaf(_)));
+    }
 }
