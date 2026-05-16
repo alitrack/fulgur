@@ -120,11 +120,19 @@ pub fn resolve_target_text(href: &str, kind: TargetTextKind, map: &AnchorMap) ->
     }
 }
 
-/// First-letter per CSS Pseudo-Elements 4 §3.2: optional leading
+/// First-letter, based on CSS Pseudo-Elements 4 §3.2: optional leading
 /// typographic punctuation, the first typographic letter/digit
 /// (grapheme cluster), then optional trailing typographic punctuation.
-/// Whitespace before the first letter (after fully-trimmed leading
-/// whitespace) terminates the run. Returns `""` when there is no letter.
+/// This is **extended beyond the literal §3.2 category set** (which is
+/// punctuation-only: Pc Pd Ps Pe Pi Pf Po): leading and trailing runs
+/// also include currency, math, and modifier/other symbols (e.g. `$`,
+/// `¥`, `+`, `©`), so `$Hello` yields `$H`. The symbol inclusion is an
+/// intentional design extension, not a consequence of the spec.
+/// Whitespace appearing between the leading punctuation/symbol run and
+/// the first letter (after fully-trimmed leading whitespace) terminates
+/// the first-letter, yielding `""` — an intentional interpretation of
+/// the spec's ambiguous contiguity wording. Returns `""` when there is
+/// no letter.
 fn compute_first_letter(text: &str) -> String {
     use unicode_properties::{GeneralCategory as GC, UnicodeGeneralCategory};
     use unicode_segmentation::UnicodeSegmentation;
@@ -163,7 +171,7 @@ fn compute_first_letter(text: &str) -> String {
         })
     }
 
-    let trimmed = text.trim_start_matches(char::is_whitespace);
+    let trimmed = text.trim_start();
     let gs: Vec<&str> = trimmed.graphemes(true).collect();
     let mut i = 0;
     while i < gs.len() && is_punct(gs[i]) {
@@ -355,6 +363,21 @@ mod tests {
     #[test]
     fn first_letter_grapheme_cluster() {
         assert_eq!(compute_first_letter("e\u{0301}tude"), "e\u{0301}");
+    }
+    #[test]
+    fn first_letter_includes_leading_currency_symbol() {
+        // Intentional extension beyond literal §3.2 (P*-only): leading
+        // currency/math/symbol clusters ride with the first letter.
+        assert_eq!(compute_first_letter("$Hello"), "$H");
+    }
+    #[test]
+    fn first_letter_trailing_punct_then_more_letters() {
+        // Exercises the trailing-punct (`j`) advance: stop at the next letter.
+        assert_eq!(compute_first_letter("H!Hello"), "H!");
+    }
+    #[test]
+    fn first_letter_trailing_punct_then_nonletter() {
+        assert_eq!(compute_first_letter("「Hello」 world"), "「H");
     }
 
     #[test]
