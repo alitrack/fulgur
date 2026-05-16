@@ -3646,3 +3646,163 @@ fn target_text_second_arg_resolves_target_fragments() {
         "target-text second-argument payload missing from extracted PDF text: {text:?}"
     );
 }
+
+/// Concatenate every decompressed content/object stream of `pdf` so a
+/// test can grep for the UTF-16BE `/ActualText` payloads Krilla writes
+/// into tagged-PDF `/Span` markers (mirrors the technique in
+/// `target_counter_in_link_loaded_css_triggers_pass_two` and
+/// `target_text_in_top_center_resolves_via_implicit_href`). lopdf 0.40
+/// cannot decode the CID-encoded `TJ` strings, so ActualText is the
+/// portable signal that resolved generated content reached pass 2.
+fn decompressed_streams_lower(pdf: &[u8]) -> String {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("grep.pdf");
+    std::fs::write(&path, pdf).expect("write pdf");
+    let doc = lopdf::Document::load(&path).expect("load pdf");
+    let mut decompressed = String::new();
+    for (_id, obj) in doc.objects.iter() {
+        if let lopdf::Object::Stream(s) = obj {
+            let mut clone = s.clone();
+            let _ = clone.decompress();
+            decompressed.push_str(&String::from_utf8_lossy(&clone.content));
+        }
+    }
+    decompressed.to_ascii_lowercase()
+}
+
+/// fulgur-r73p Task 4.1: `target-text(attr(href), before)` must reflect a
+/// target element's *cascade-only* `::before` content. `#sec::before`
+/// here uses `attr(data-tag)` + a literal string — content with no
+/// `counter()` / `target-*`, which the GCPM parser deliberately routes to
+/// Blitz's normal cascade and which the old plumbing never captured into
+/// `AnchorMap`. The read-only `collect_pseudo_text` capture added in
+/// Task 2 must pick `APP: ` up so the referencing `.ref::after` renders
+/// it into pass 2. The `<a>` carries visible text so the inline host is
+/// not culled before its generated `::after` is drawn.
+#[test]
+fn target_text_before_resolves_attr_pseudo() {
+    let html = r##"<!doctype html><html><head><style>
+      body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; }
+      #sec::before { content: attr(data-tag) ": "; }
+      .ref::after  { content: target-text(attr(href), before); }
+    </style></head><body>
+      <p>See <a class="ref" href="#sec">the appendix</a> for details.</p>
+      <h2 id="sec" data-tag="APP">Appendix</h2>
+    </body></html>"##;
+    let pdf = tagged_render_with_noto(html);
+    assert!(!pdf.is_empty());
+
+    let lower = decompressed_streams_lower(&pdf);
+    let needle = hex_utf16be("APP: ");
+    assert!(
+        lower.contains(&needle.to_ascii_lowercase()),
+        "ActualText missing UTF-16BE for `APP: ` — collect_pseudo_text did \
+         not capture the cascade-only attr() `::before` of #sec into the \
+         AnchorMap, so `.ref::after {{ content: target-text(attr(href), \
+         before) }}` rendered nothing. Looked for {needle} in {} bytes of \
+         decompressed streams.",
+        lower.len()
+    );
+}
+
+/// fulgur-r73p Task 4.2 (regression): exercising the counter-tracked
+/// `collect_pseudo_text` capture path must not panic after Task 2 removed
+/// the `pseudo_text_by_node` plumbing.
+///
+/// `#s::after` uses `counter(c)`, so `CounterPass` + `InjectCssPass`
+/// overlay the resolved value into the cascade; `.r::before { content:
+/// target-text(attr(href), after) }` makes `has_target_references()`
+/// true so `collect_pseudo_text` reads that counter-overlaid computed
+/// content for `#s::after` directly. The regression Task 2 must not
+/// reintroduce is a panic / `None` on that read.
+///
+/// This is a no-panic smoke guard, not a text-layer assertion, and that
+/// is deliberate: the *text-layer* behaviour of counter-tracked
+/// `target-text` is already verified by
+/// `target_text_second_arg_resolves_target_fragments` (which renders the
+/// captured counter-tracked value through an `@page` margin box and
+/// asserts `AfterFrag1` via `pdftotext`). A text assertion *here* is not
+/// possible because fulgur's *element* `::before`/`::after` renderer has
+/// a pre-existing, unrelated limitation: multi-item generated content
+/// only emits its first item (reproduces with plain
+/// `content: "[" "x" "]"` — no `counter()`, no `target-*` — so it cannot
+/// originate in Tasks 2-3's read-only, `has_target_references`-gated
+/// capture). That element-pseudo truncation is out of scope for this PR
+/// and tracked separately. The capture itself (Tasks 2-3) is text-layer
+/// proven by tests #1/#3/#4 below and by `..._second_arg...`.
+#[test]
+fn target_text_after_resolves_counter_via_counter_pass() {
+    let html = r##"<!doctype html><html><head><style>
+      body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; counter-reset: c; }
+      h2 { counter-increment: c; }
+      #s::after { content: " [" counter(c) "]"; }
+      .r::before { content: target-text(attr(href), after); }
+    </style></head><body>
+      <h2>One</h2>
+      <h2 id="s">Two</h2>
+      <p>Jump to <a class="r" href="#s">section two</a> now.</p>
+    </body></html>"##;
+    // collect_pseudo_text reads #s::after's counter-overlaid computed
+    // content during build_anchor_map (gated on the target-text ref
+    // above). Guard: that read must not panic and render must succeed.
+    let pdf = tagged_render_with_noto(html);
+    assert!(!pdf.is_empty());
+}
+
+/// fulgur-r73p Task 4.3: `target-text(url, first-letter)` must apply the
+/// CSS Pseudo-Elements 4 §3.2 algorithm from Task 3 — leading
+/// typographic punctuation (`「`) is included with the first letter, so
+/// the result is `「H`, not `「` or `H`.
+#[test]
+fn target_text_first_letter_typographic() {
+    let html = r##"<!doctype html><html><head><style>
+      body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; }
+      .r::after { content: target-text(attr(href), first-letter); }
+    </style></head><body>
+      <p>Open <a class="r" href="#h">the heading</a> reference.</p>
+      <h2 id="h">「Hello」</h2>
+    </body></html>"##;
+    let pdf = tagged_render_with_noto(html);
+    assert!(!pdf.is_empty());
+
+    let lower = decompressed_streams_lower(&pdf);
+    let needle = hex_utf16be("「H");
+    assert!(
+        lower.contains(&needle.to_ascii_lowercase()),
+        "ActualText missing UTF-16BE for `「H` — compute_first_letter did \
+         not fold the leading typographic punctuation into the first \
+         letter per CSS Pseudo-Elements 4 §3.2. Looked for {needle} in {} \
+         bytes of decompressed streams.",
+        lower.len()
+    );
+}
+
+/// fulgur-r73p Task 4.4: a `target-text(url, before)` whose target has
+/// no `::before` must resolve to the empty string — no panic, render
+/// still succeeds, and the surrounding literal `[` / `]` brackets still
+/// render (with nothing captured between them).
+#[test]
+fn target_text_empty_for_missing_pseudo() {
+    let html = r##"<!doctype html><html><head><style>
+      body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; }
+      .r::after { content: "[" target-text(attr(href), before) "]"; }
+    </style></head><body>
+      <p>Check <a class="r" href="#h">this link</a> here.</p>
+      <h2 id="h">No pseudo here</h2>
+    </body></html>"##;
+    let pdf = tagged_render_with_noto(html);
+    assert!(!pdf.is_empty()); // resolves to "[]" — no panic, empty capture
+
+    // The literal brackets must survive (capture is empty, not erroring).
+    let lower = decompressed_streams_lower(&pdf);
+    let open = hex_utf16be("[");
+    let close = hex_utf16be("]");
+    assert!(
+        lower.contains(&open.to_ascii_lowercase()) && lower.contains(&close.to_ascii_lowercase()),
+        "ActualText missing UTF-16BE for the `[` / `]` literals — a \
+         missing `::before` should resolve target-text to empty, not \
+         suppress the surrounding generated content. Looked for {open} \
+         and {close} in {} bytes of decompressed streams.",
+        lower.len()
+    );
+}
