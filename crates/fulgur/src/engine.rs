@@ -874,9 +874,10 @@ fn walk_anchors(
 /// path covers cascade-only and counter-tracked pseudo content; no CSS is
 /// injected and Blitz rendering is never overridden.
 ///
-/// Stylo 0.8 keeps `attr()` deferred as `ContentItem::Attr` (it is NOT
-/// substituted at computed time), so this resolves it against
-/// `parent_elem` and falls back to `a.fallback`. Counter / Counters /
+/// Stylo 0.8 may keep `attr()` deferred as `ContentItem::Attr` rather
+/// than substituting it at computed time; both the resolved-`String` and
+/// the deferred-`Attr` shapes are handled (the latter resolved against
+/// `parent_elem`, falling back to `a.fallback`). Counter / Counters /
 /// Image / quote items are skipped — text items only, then
 /// whitespace-normalized to match `collect_text_content`. A `counter()`
 /// pseudo that GCPM did not counter-track has no injected `String`
