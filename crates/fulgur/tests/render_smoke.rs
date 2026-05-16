@@ -3793,16 +3793,18 @@ fn target_text_empty_for_missing_pseudo() {
     let pdf = tagged_render_with_noto(html);
     assert!(!pdf.is_empty()); // resolves to "[]" — no panic, empty capture
 
-    // The literal brackets must survive (capture is empty, not erroring).
+    // The literal brackets must be adjacent (`[]`, not `[X]`): a missing
+    // `::before` resolves the inner target-text to EMPTY, so nothing is
+    // captured between them. Two separate `[`/`]` presence checks cannot
+    // distinguish `[]` from `[X]`; assert the contiguous UTF-16BE run.
     let lower = decompressed_streams_lower(&pdf);
-    let open = hex_utf16be("[");
-    let close = hex_utf16be("]");
+    let needle = hex_utf16be("[]");
     assert!(
-        lower.contains(&open.to_ascii_lowercase()) && lower.contains(&close.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for the `[` / `]` literals — a \
-         missing `::before` should resolve target-text to empty, not \
-         suppress the surrounding generated content. Looked for {open} \
-         and {close} in {} bytes of decompressed streams.",
+        lower.contains(&needle.to_ascii_lowercase()),
+        "ActualText missing UTF-16BE for the contiguous `[]` literal — a \
+         missing `::before` should resolve target-text to the empty \
+         string, leaving the surrounding brackets adjacent (`[]`, not \
+         `[X]`). Looked for {needle} in {} bytes of decompressed streams.",
         lower.len()
     );
 }
