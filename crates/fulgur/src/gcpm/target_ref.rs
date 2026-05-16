@@ -27,12 +27,6 @@ pub struct AnchorEntry {
     pub after_text: String,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct AnchorPseudoText {
-    pub before_text: String,
-    pub after_text: String,
-}
-
 impl AnchorMap {
     pub fn new() -> Self {
         Self::default()
