@@ -9,7 +9,6 @@ use crate::gcpm::counter::{format_counter, format_counter_chain};
 use crate::gcpm::{CounterStyle, TargetTextKind};
 use crate::pagination_layout::PaginationGeometryTable;
 use std::collections::BTreeMap;
-use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, Default)]
 pub struct AnchorMap {
@@ -117,8 +116,67 @@ pub fn resolve_target_text(href: &str, kind: TargetTextKind, map: &AnchorMap) ->
         TargetTextKind::Content => entry.text.clone(),
         TargetTextKind::Before => entry.before_text.clone(),
         TargetTextKind::After => entry.after_text.clone(),
-        TargetTextKind::FirstLetter => entry.text.graphemes(true).next().unwrap_or("").to_string(),
+        TargetTextKind::FirstLetter => compute_first_letter(&entry.text),
     }
+}
+
+/// First-letter per CSS Pseudo-Elements 4 §3.2: optional leading
+/// typographic punctuation, the first typographic letter/digit
+/// (grapheme cluster), then optional trailing typographic punctuation.
+/// Whitespace before the first letter (after fully-trimmed leading
+/// whitespace) terminates the run. Returns `""` when there is no letter.
+fn compute_first_letter(text: &str) -> String {
+    use unicode_properties::{GeneralCategory as GC, UnicodeGeneralCategory};
+    use unicode_segmentation::UnicodeSegmentation;
+
+    fn is_punct(g: &str) -> bool {
+        g.chars().all(|c| {
+            matches!(
+                c.general_category(),
+                GC::OpenPunctuation
+                    | GC::ClosePunctuation
+                    | GC::InitialPunctuation
+                    | GC::FinalPunctuation
+                    | GC::OtherPunctuation
+                    | GC::ConnectorPunctuation
+                    | GC::DashPunctuation
+                    | GC::MathSymbol
+                    | GC::OtherSymbol
+                    | GC::CurrencySymbol
+                    | GC::ModifierSymbol
+            )
+        })
+    }
+    fn is_letter(g: &str) -> bool {
+        g.chars().any(|c| {
+            matches!(
+                c.general_category(),
+                GC::UppercaseLetter
+                    | GC::LowercaseLetter
+                    | GC::TitlecaseLetter
+                    | GC::ModifierLetter
+                    | GC::OtherLetter
+                    | GC::DecimalNumber
+                    | GC::LetterNumber
+                    | GC::OtherNumber
+            )
+        })
+    }
+
+    let trimmed = text.trim_start_matches(char::is_whitespace);
+    let gs: Vec<&str> = trimmed.graphemes(true).collect();
+    let mut i = 0;
+    while i < gs.len() && is_punct(gs[i]) {
+        i += 1;
+    }
+    if i >= gs.len() || !is_letter(gs[i]) {
+        return String::new();
+    }
+    let mut j = i + 1;
+    while j < gs.len() && is_punct(gs[j]) {
+        j += 1;
+    }
+    gs[..j].concat()
 }
 
 /// Return the **1-based** page number for a DOM node, derived from
@@ -270,6 +328,33 @@ mod tests {
             resolve_target_text("#sec-1-2", TargetTextKind::FirstLetter, &m),
             "A\u{0301}"
         );
+    }
+
+    #[test]
+    fn first_letter_ascii() {
+        assert_eq!(compute_first_letter("Hello world"), "H");
+    }
+    #[test]
+    fn first_letter_skips_leading_punct_and_keeps_trailing() {
+        assert_eq!(compute_first_letter("「『Hello』"), "「『H");
+    }
+    #[test]
+    fn first_letter_digit_counts_as_letter() {
+        assert_eq!(compute_first_letter("123abc"), "1");
+    }
+    #[test]
+    fn first_letter_empty_and_all_punct() {
+        assert_eq!(compute_first_letter(""), "");
+        assert_eq!(compute_first_letter("   "), "");
+        assert_eq!(compute_first_letter("...!?"), "");
+    }
+    #[test]
+    fn first_letter_space_before_letter_yields_nothing() {
+        assert_eq!(compute_first_letter("『 H"), "");
+    }
+    #[test]
+    fn first_letter_grapheme_cluster() {
+        assert_eq!(compute_first_letter("e\u{0301}tude"), "e\u{0301}");
     }
 
     #[test]
