@@ -878,7 +878,9 @@ fn walk_anchors(
 /// substituted at computed time), so this resolves it against
 /// `parent_elem` and falls back to `a.fallback`. Counter / Counters /
 /// Image / quote items are skipped — text items only, then
-/// whitespace-normalized to match `collect_text_content`.
+/// whitespace-normalized to match `collect_text_content`. A `counter()`
+/// pseudo that GCPM did not counter-track has no injected `String`
+/// overlay and therefore captures as empty here.
 fn collect_pseudo_text(
     doc: &BaseDocument,
     pseudo_id: Option<usize>,
