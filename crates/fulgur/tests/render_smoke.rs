@@ -3603,6 +3603,33 @@ fn target_text_in_top_center_resolves_via_implicit_href() {
 }
 
 #[test]
+fn tagged_pdf_list_items_without_links_have_lbl_structure() {
+    // Exercises `try_start_tagged` with `PdfTag::Li` (the `Li =>` branch that
+    // returns `lbody_id`) and `draw_list_item_marker_tagged` when
+    // `tag_collector` is Some and `li_lbl_ids` contains the node_id.
+    // The existing `tagged_pdf_link_in_list_item_produces_link_struct_element`
+    // test covers list items WITH hyperlinks; this covers the common no-link case.
+    let html = r#"<!DOCTYPE html><html lang="en"><body>
+        <ul>
+            <li>First item</li>
+            <li>Second item</li>
+        </ul>
+        <ol>
+            <li>Numbered one</li>
+            <li>Numbered two</li>
+        </ol>
+    </body></html>"#;
+    let pdf = tagged_render_with_noto(html);
+    assert!(!pdf.is_empty());
+    let s = String::from_utf8_lossy(&pdf);
+    assert!(s.contains("/StructTreeRoot"), "must have /StructTreeRoot");
+    assert!(
+        s.contains("/LI") || s.contains("/Li"),
+        "must have /LI structure element for list items"
+    );
+}
+
+#[test]
 fn target_text_second_arg_resolves_target_fragments() {
     let html = r##"
 <!doctype html>

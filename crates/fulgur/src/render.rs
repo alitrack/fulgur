@@ -5171,6 +5171,73 @@ mod tests {
         assert!(matches!(tree.children[0], Node::Group(_)));
     }
 
+    // --- decode_image_for_v2: format arms ---
+
+    fn make_image_entry(
+        bytes: &[u8],
+        format: crate::image::ImageFormat,
+    ) -> crate::drawables::ImageEntry {
+        crate::drawables::ImageEntry {
+            image_data: std::sync::Arc::new(bytes.to_vec()),
+            format,
+            width: 1.0,
+            height: 1.0,
+            opacity: 1.0,
+            visible: true,
+        }
+    }
+
+    #[test]
+    fn decode_image_for_v2_jpeg_arm_is_exercised() {
+        // MINIMAL_JPEG: SOI + APP0 + SOF0 + EOI — no DQT/DHT/SOS, so the decode
+        // fails gracefully (returns None). The test verifies that the
+        // `ImageFormat::Jpeg => Image::from_jpeg(...)` match arm is reachable
+        // without panicking (regression: wrong format dispatch would panic).
+        let jpeg_bytes: &[u8] = &[
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00,
+            0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00,
+            0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xD9,
+        ];
+        let entry = make_image_entry(jpeg_bytes, crate::image::ImageFormat::Jpeg);
+        // From_jpeg on an incomplete JPEG returns Err → decode_image_for_v2 → None.
+        let result = decode_image_for_v2(&entry);
+        assert!(
+            result.is_none(),
+            "incomplete JPEG must decode to None, not panic"
+        );
+    }
+
+    #[test]
+    fn decode_image_for_v2_gif_valid_returns_some() {
+        // Valid 1×1 GIF89a (same bytes as the data:image/gif fixture used in
+        // smoke tests). Exercises the `ImageFormat::Gif => Image::from_gif(...)`
+        // arm and verifies it succeeds on a well-formed GIF.
+        let gif_bytes: &[u8] = &[
+            0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x21,
+            0xf9, 0x04, 0x01, 0x0a, 0x00, 0x01, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+            0x01, 0x00, 0x00, 0x02, 0x02, 0x4c, 0x01, 0x00, 0x3b,
+        ];
+        let entry = make_image_entry(gif_bytes, crate::image::ImageFormat::Gif);
+        let result = decode_image_for_v2(&entry);
+        assert!(result.is_some(), "valid GIF must decode to Some");
+    }
+
+    #[test]
+    fn decode_image_for_v2_png_valid_returns_some() {
+        // Valid 1×1 red PNG. Exercises the `ImageFormat::Png => Image::from_png(...)`
+        // arm directly via `decode_image_for_v2`.
+        let png_bytes: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92,
+            0xEF, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        let entry = make_image_entry(png_bytes, crate::image::ImageFormat::Png);
+        let result = decode_image_for_v2(&entry);
+        assert!(result.is_some(), "valid PNG must decode to Some");
+    }
+
     // --- build_page_skip_sets: table overflow_clip with empty descendants ---
 
     #[test]
