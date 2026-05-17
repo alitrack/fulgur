@@ -3684,7 +3684,7 @@ fn target_text_before_resolves_attr_pseudo() {
     let html = r##"<!doctype html><html><head><style>
       body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; }
       #sec::before { content: attr(data-tag) ": "; }
-      .ref::after  { content: target-text(attr(href), before); }
+      .ref::after  { content: "[" target-text(attr(href), before) "]"; }
     </style></head><body>
       <p>See <a class="ref" href="#sec">the appendix</a> for details.</p>
       <h2 id="sec" data-tag="APP">Appendix</h2>
@@ -3693,14 +3693,19 @@ fn target_text_before_resolves_attr_pseudo() {
     assert!(!pdf.is_empty());
 
     let lower = decompressed_streams_lower(&pdf);
-    let needle = hex_utf16be("APP: ");
+    // Sentinel-wrapped: the trailing `]` immediately follows the captured
+    // text, so a hit proves the trailing separator space of `APP: ` is part
+    // of the captured pseudo content — not borrowed from following page
+    // text. A trim-everything normalization would yield `[APP:]` and fail.
+    let needle = hex_utf16be("[APP: ]");
     assert!(
         lower.contains(&needle.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for `APP: ` — collect_pseudo_text did \
-         not capture the cascade-only attr() `::before` of #sec into the \
-         AnchorMap, so `.ref::after {{ content: target-text(attr(href), \
-         before) }}` rendered nothing. Looked for {needle} in {} bytes of \
-         decompressed streams.",
+        "ActualText missing UTF-16BE for `[APP: ]` — collect_pseudo_text did \
+         not capture the cascade-only attr() `::before` of #sec (with its \
+         trailing separator space) into the AnchorMap, so `.ref::after {{ \
+         content: \"[\" target-text(attr(href), before) \"]\" }}` rendered \
+         the wrong text. Looked for {needle} in {} bytes of decompressed \
+         streams.",
         lower.len()
     );
 }

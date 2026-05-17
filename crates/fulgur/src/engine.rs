@@ -878,10 +878,13 @@ fn walk_anchors(
 /// than substituting it at computed time; both the resolved-`String` and
 /// the deferred-`Attr` shapes are handled (the latter resolved against
 /// `parent_elem`, falling back to `a.fallback`). Counter / Counters /
-/// Image / quote items are skipped — text items only, then
-/// whitespace-normalized to match `collect_text_content`. A `counter()`
-/// pseudo that GCPM did not counter-track has no injected `String`
-/// overlay and therefore captures as empty here.
+/// Image / quote items are skipped — text items only, then internal
+/// whitespace runs are collapsed while leading/trailing whitespace is
+/// preserved (CSS string literals such as `content: attr(x) ": "` keep
+/// their separator space; HTML whitespace collapsing does not apply to
+/// generated content). A `counter()` pseudo that GCPM did not
+/// counter-track has no injected `String` overlay and therefore captures
+/// as empty here.
 fn collect_pseudo_text(
     doc: &BaseDocument,
     pseudo_id: Option<usize>,
@@ -917,7 +920,37 @@ fn collect_pseudo_text(
             _ => {}
         }
     }
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
+    collapse_ws_keep_edges(&out)
+}
+
+/// Collapse internal whitespace runs to a single space while preserving a
+/// single leading/trailing space if the original had any. Unlike
+/// `split_whitespace().join(" ")` (used by `collect_text_content` for HTML
+/// text, where boundary whitespace is collapsed away by HTML rules), CSS
+/// generated content keeps author-written separator spaces — e.g.
+/// `content: attr(data-tag) ": "` must yield `APP: ` so a referencing
+/// `target-text(..., before)` does not jam against following text.
+fn collapse_ws_keep_edges(s: &str) -> String {
+    let leading = s.chars().next().is_some_and(char::is_whitespace);
+    let trailing = s.chars().next_back().is_some_and(char::is_whitespace);
+    let core = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if core.is_empty() {
+        // All-whitespace (or empty) input: a lone space if any ws was present.
+        return if leading || trailing {
+            " ".to_string()
+        } else {
+            String::new()
+        };
+    }
+    let mut r = String::with_capacity(core.len() + 2);
+    if leading {
+        r.push(' ');
+    }
+    r.push_str(&core);
+    if trailing {
+        r.push(' ');
+    }
+    r
 }
 
 fn collect_text_content(doc: &BaseDocument, node_id: usize) -> String {
