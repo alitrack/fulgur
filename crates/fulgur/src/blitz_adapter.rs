@@ -1644,9 +1644,6 @@ pub struct CounterPass {
     counter_id: RefCell<usize>,
     /// Counter ops keyed by node_id, for later use in Pageable markers.
     ops_by_node: RefCell<Vec<(usize, Vec<CounterOp>)>>,
-    /// Resolved `::before` / `::after` text keyed by node_id. Pass 1 uses
-    /// this to populate `AnchorMap` for `target-text(..., before|after)`.
-    pseudo_text_by_node: RefCell<BTreeMap<usize, crate::gcpm::target_ref::AnchorPseudoText>>,
     /// Counter-state snapshot taken at each visited element after the
     /// element's own `counter-reset` / `counter-increment` / `counter-set`
     /// operations have been applied (Phase 2). Consumed by `BookmarkPass`
@@ -1683,7 +1680,6 @@ impl CounterPass {
             generated_css: RefCell::new(String::new()),
             counter_id: RefCell::new(0),
             ops_by_node: RefCell::new(Vec::new()),
-            pseudo_text_by_node: RefCell::new(BTreeMap::new()),
             node_snapshots: RefCell::new(BTreeMap::new()),
             record_node_snapshots: false,
             anchor_map: None,
@@ -1726,10 +1722,6 @@ impl CounterPass {
     /// Subsequent calls return an empty map (the snapshot is moved out).
     pub fn take_node_snapshots(&self) -> BTreeMap<usize, BTreeMap<String, Vec<i32>>> {
         std::mem::take(&mut *self.node_snapshots.borrow_mut())
-    }
-
-    pub fn take_pseudo_texts(&self) -> BTreeMap<usize, crate::gcpm::target_ref::AnchorPseudoText> {
-        std::mem::take(&mut *self.pseudo_text_by_node.borrow_mut())
     }
 
     /// Consume self and return (ops_by_node for Pageable markers, generated CSS for body).
@@ -1880,11 +1872,6 @@ impl CounterPass {
             for idx in &before_indices {
                 let mapping = &self.content_mappings[*idx];
                 let resolved = self.resolve_content(&mapping.content, element);
-                self.pseudo_text_by_node
-                    .borrow_mut()
-                    .entry(node_id)
-                    .or_default()
-                    .before_text = resolved.clone();
                 let _ = write!(
                     css,
                     "[data-fulgur-cid=\"{}\"]::before{{content:\"{}\"}}",
@@ -1911,11 +1898,6 @@ impl CounterPass {
             for idx in &after_indices {
                 let mapping = &self.content_mappings[*idx];
                 let resolved = self.resolve_content(&mapping.content, element);
-                self.pseudo_text_by_node
-                    .borrow_mut()
-                    .entry(node_id)
-                    .or_default()
-                    .after_text = resolved.clone();
                 let _ = write!(
                     css,
                     "[data-fulgur-cid=\"{}\"]::after{{content:\"{}\"}}",

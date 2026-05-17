@@ -283,7 +283,7 @@ impl Engine {
         // value is the full nesting chain (`Vec<i32>`, outer-to-inner)
         // per CSS Lists 3 §4.5, so both `counter()` (innermost) and
         // `counters()` (joined) can resolve directly.
-        let (counter_ops_by_node_vec, counter_css, counter_snapshots, pseudo_texts) =
+        let (counter_ops_by_node_vec, counter_css, counter_snapshots) =
             if !gcpm.counter_mappings.is_empty() || !gcpm.content_counter_mappings.is_empty() {
                 let mut pass = crate::blitz_adapter::CounterPass::new(
                     gcpm.counter_mappings.clone(),
@@ -297,11 +297,10 @@ impl Engine {
                 }
                 crate::blitz_adapter::apply_single_pass(&pass, &mut doc, &ctx);
                 let snapshots = pass.take_node_snapshots();
-                let pseudo_texts = pass.take_pseudo_texts();
                 let (ops, css) = pass.into_parts();
-                (ops, css, snapshots, pseudo_texts)
+                (ops, css, snapshots)
             } else {
-                (Vec::new(), String::new(), BTreeMap::new(), BTreeMap::new())
+                (Vec::new(), String::new(), BTreeMap::new())
             };
 
         // Inject counter-resolved CSS for ::before/::after. Must happen
@@ -497,12 +496,7 @@ impl Engine {
         // `walk_anchors` short-circuits on `MAX_DOM_DEPTH`.
         let needs_anchor_map_for_pass_two = anchor_map.is_none() && has_target_refs;
         let collected_anchor_map = if needs_anchor_map_for_pass_two {
-            build_anchor_map(
-                &doc,
-                &pagination_geometry,
-                &counter_snapshots_for_anchor,
-                &pseudo_texts,
-            )
+            build_anchor_map(&doc, &pagination_geometry, &counter_snapshots_for_anchor)
         } else {
             AnchorMap::default()
         };
@@ -804,9 +798,7 @@ impl Engine {
 }
 
 use crate::blitz_adapter::get_attr;
-use crate::gcpm::target_ref::{
-    AnchorEntry, AnchorMap, AnchorPseudoText, fragment_id_from_href, page_for_node,
-};
+use crate::gcpm::target_ref::{AnchorEntry, AnchorMap, fragment_id_from_href, page_for_node};
 use crate::pagination_layout::PaginationGeometryTable;
 use blitz_dom::BaseDocument;
 
@@ -814,7 +806,6 @@ fn build_anchor_map(
     doc: &BaseDocument,
     pagination_geometry: &PaginationGeometryTable,
     counter_snapshots: &BTreeMap<usize, BTreeMap<String, Vec<i32>>>,
-    pseudo_texts: &BTreeMap<usize, AnchorPseudoText>,
 ) -> AnchorMap {
     let mut map = AnchorMap::new();
     walk_anchors(
@@ -823,7 +814,6 @@ fn build_anchor_map(
         0,
         pagination_geometry,
         counter_snapshots,
-        pseudo_texts,
         &mut map,
     );
     map
@@ -835,7 +825,6 @@ fn walk_anchors(
     depth: usize,
     geometry: &PaginationGeometryTable,
     snapshots: &BTreeMap<usize, BTreeMap<String, Vec<i32>>>,
-    pseudo_texts: &BTreeMap<usize, AnchorPseudoText>,
     out: &mut AnchorMap,
 ) {
     if depth >= crate::MAX_DOM_DEPTH {
@@ -855,22 +844,113 @@ fn walk_anchors(
     {
         let counters = snapshots.get(&node_id).cloned().unwrap_or_default();
         let text = collect_text_content(doc, node_id);
-        let pseudo_text = pseudo_texts.get(&node_id).cloned().unwrap_or_default();
+        let before_text = collect_pseudo_text(doc, node.before, elem);
+        let after_text = collect_pseudo_text(doc, node.after, elem);
         out.insert(
             frag.to_string(),
             AnchorEntry {
                 page_num,
                 counters,
                 text,
-                before_text: pseudo_text.before_text,
-                after_text: pseudo_text.after_text,
+                before_text,
+                after_text,
             },
         );
     }
     let children: Vec<usize> = node.children.clone();
     for c in children {
-        walk_anchors(doc, c, depth + 1, geometry, snapshots, pseudo_texts, out);
+        walk_anchors(doc, c, depth + 1, geometry, snapshots, out);
     }
+}
+
+/// Capture the resolved text of a `::before` / `::after` pseudo node for
+/// `target-text(url, before|after)`.
+///
+/// Read-only post-cascade read via `primary_styles().get_counters().content`
+/// (cf. `blitz_adapter::extract_content_image_url`). Runs at `walk_anchors`
+/// time — after CounterPass + InjectCssPass + pagination — so the cascade
+/// carries both fulgur-left-to-Blitz `attr()`/string content and
+/// CounterPass's injected resolved-counter overlay (a `String` item). One
+/// path covers cascade-only and counter-tracked pseudo content; no CSS is
+/// injected and Blitz rendering is never overridden.
+///
+/// Stylo 0.8 may keep `attr()` deferred as `ContentItem::Attr` rather
+/// than substituting it at computed time; both the resolved-`String` and
+/// the deferred-`Attr` shapes are handled (the latter resolved against
+/// `parent_elem`, falling back to `a.fallback`). Counter / Counters /
+/// Image / quote items are skipped — text items only, then internal
+/// whitespace runs are collapsed while leading/trailing whitespace is
+/// preserved (CSS string literals such as `content: attr(x) ": "` keep
+/// their separator space; HTML whitespace collapsing does not apply to
+/// generated content). A `counter()` pseudo that GCPM did not
+/// counter-track has no injected `String` overlay and therefore captures
+/// as empty here.
+fn collect_pseudo_text(
+    doc: &BaseDocument,
+    pseudo_id: Option<usize>,
+    parent_elem: &blitz_dom::node::ElementData,
+) -> String {
+    use style::values::generics::counters::{Content, ContentItem as Sci};
+    let Some(pid) = pseudo_id else {
+        return String::new();
+    };
+    let Some(node) = doc.get_node(pid) else {
+        return String::new();
+    };
+    let Some(styles) = node.primary_styles() else {
+        return String::new();
+    };
+    let content = &styles.get_counters().content;
+    let Content::Items(item_data) = content else {
+        return String::new();
+    };
+    let mut out = String::new();
+    // Only the "main" items (before `alt_start`); content after is
+    // alt-text in CSS Level 3 Content.
+    for item in &item_data.items[..item_data.alt_start] {
+        match item {
+            Sci::String(s) => out.push_str(s.as_ref()),
+            Sci::Attr(a) => {
+                let name = a.attribute.as_ref();
+                match get_attr(parent_elem, name) {
+                    Some(v) => out.push_str(v),
+                    None => out.push_str(a.fallback.as_ref()),
+                }
+            }
+            _ => {}
+        }
+    }
+    collapse_ws_keep_edges(&out)
+}
+
+/// Collapse internal whitespace runs to a single space while preserving a
+/// single leading/trailing space if the original had any. Unlike
+/// `split_whitespace().join(" ")` (used by `collect_text_content` for HTML
+/// text, where boundary whitespace is collapsed away by HTML rules), CSS
+/// generated content keeps author-written separator spaces — e.g.
+/// `content: attr(data-tag) ": "` must yield `APP: ` so a referencing
+/// `target-text(..., before)` does not jam against following text.
+fn collapse_ws_keep_edges(s: &str) -> String {
+    let leading = s.chars().next().is_some_and(char::is_whitespace);
+    let trailing = s.chars().next_back().is_some_and(char::is_whitespace);
+    let core = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if core.is_empty() {
+        // All-whitespace (or empty) input: a lone space if any ws was present.
+        return if leading || trailing {
+            " ".to_string()
+        } else {
+            String::new()
+        };
+    }
+    let mut r = String::with_capacity(core.len() + 2);
+    if leading {
+        r.push(' ');
+    }
+    r.push_str(&core);
+    if trailing {
+        r.push(' ');
+    }
+    r
 }
 
 fn collect_text_content(doc: &BaseDocument, node_id: usize) -> String {
@@ -1085,6 +1165,23 @@ impl EngineBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collect_pseudo_text_resolves_string_and_attr() {
+        // `walk_anchors` (and therefore `collect_pseudo_text`) only runs
+        // when GCPM has an active `target-*` reference, so the CSS must
+        // include a real `target-text(...)` or this exercises nothing.
+        let html = r##"<!doctype html><html><head><style>
+          #t::before { content: attr(data-x) " "; }
+          #t::after  { content: "AFT"; }
+          .ref::after { content: target-text(attr(href), before); }
+        </style></head><body>
+          <p><a class="ref" href="#t"></a></p>
+          <h2 id="t" data-x="DX">Title</h2>
+        </body></html>"##;
+        let pdf = Engine::builder().build().render_html(html).unwrap();
+        assert!(!pdf.is_empty());
+    }
 
     #[test]
     fn builder_bookmarks_defaults_to_false() {
