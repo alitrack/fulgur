@@ -2271,6 +2271,248 @@ mod dp_unit_tests {
         };
         assert!(compute_overflow_clip_path(&style, 0.0, 0.0, 100.0, 100.0).is_some());
     }
+
+    // ── apply_border_style (private) ────────────────────────
+
+    #[test]
+    fn apply_border_style_dashed_sets_dash_array() {
+        let stroke = krilla::paint::Stroke::default();
+        let result = apply_border_style(stroke, BorderStyleValue::Dashed, 4.0);
+        let s = result.expect("Dashed returns Some");
+        let dash = s.dash.expect("Dashed must set a dash pattern");
+        assert_eq!(dash.array.len(), 2);
+        // dash_len = width * 3.0 = 12.0
+        assert!((dash.array[0] - 12.0).abs() < 1e-4, "on={}", dash.array[0]);
+        assert!((dash.array[1] - 12.0).abs() < 1e-4, "off={}", dash.array[1]);
+        assert!((dash.offset - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn apply_border_style_dotted_sets_round_cap_and_dot_gap() {
+        let stroke = krilla::paint::Stroke::default();
+        let result = apply_border_style(stroke, BorderStyleValue::Dotted, 4.0);
+        let s = result.expect("Dotted returns Some");
+        assert!(
+            matches!(s.line_cap, krilla::paint::LineCap::Round),
+            "LineCap must be Round for dotted"
+        );
+        let dash = s.dash.expect("Dotted must set a dash pattern");
+        assert_eq!(dash.array.len(), 2);
+        // dot = 0.0, gap = width * 2.0 = 8.0
+        assert!((dash.array[0] - 0.0).abs() < 1e-4, "dot={}", dash.array[0]);
+        assert!((dash.array[1] - 8.0).abs() < 1e-4, "gap={}", dash.array[1]);
+    }
+
+    // ── colored_stroke (pub(crate)) ─────────────────────────
+
+    #[test]
+    fn colored_stroke_sets_width_and_opacity() {
+        let color = [200_u8, 100, 50, 200];
+        let opacity = krilla::num::NormalizedF32::new(200.0 / 255.0).expect("valid NormalizedF32");
+        let stroke = colored_stroke(&color, 3.5, opacity);
+        assert!((stroke.width - 3.5).abs() < 1e-4, "width={}", stroke.width);
+        assert!(
+            (stroke.opacity.get() - opacity.get()).abs() < 1e-4,
+            "opacity mismatch"
+        );
+    }
+
+    // ── LinkCollector: stale index after take_page ──────────
+
+    #[test]
+    fn link_collector_stale_index_recovers_after_take_page() {
+        let mut collector = LinkCollector::new();
+        let link = make_test_link();
+
+        // First push: creates an occurrence at bucket-index 0 and records it in the index.
+        collector.set_current_page(0);
+        collector.push_rect(
+            &link,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+        );
+
+        // Drain page 0: the bucket Vec is removed, but the dedup index still
+        // holds `(page=0, ptr) → 0`. This is the stale-index scenario.
+        let taken = collector.take_page(0);
+        assert_eq!(taken.len(), 1);
+
+        // Second push to the same (page, link): the stale bucket.get_mut(0) returns
+        // None (bucket was removed then re-created as empty), so the defensive
+        // branch fires and a new occurrence is created instead of appending.
+        collector.push_rect(
+            &link,
+            Rect {
+                x: 20.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+        );
+
+        let all = collector.into_occurrences();
+        assert_eq!(
+            all.len(),
+            1,
+            "one new occurrence after stale index recovery"
+        );
+        assert_eq!(
+            all[0].quads.len(),
+            1,
+            "only the rect pushed after take_page"
+        );
+    }
+
+    // ── draw_block_border canvas smoke tests ─────────────────
+    //
+    // These tests exercise draw paths that require a real Krilla surface.
+    // They do not verify visual output — VRT handles that — but they do
+    // drive coverage for the branches inside `draw_block_border` and
+    // the helper functions it calls (`draw_border_line`, `stroke_line`,
+    // `stroke_inset_rect`, `colored_stroke`, `apply_border_style`).
+
+    fn with_canvas_smoke<F: FnOnce(&mut Canvas<'_, '_>)>(f: F) {
+        let mut doc = krilla::Document::new();
+        let settings = krilla::page::PageSettings::from_wh(200.0, 200.0).expect("valid page size");
+        let mut page = doc.start_page_with(settings);
+        let mut surface = page.surface();
+        let mut canvas = Canvas {
+            surface: &mut surface,
+            bookmark_collector: None,
+            link_collector: None,
+            tag_collector: None,
+            link_run_node_id: None,
+        };
+        f(&mut canvas);
+    }
+
+    #[test]
+    fn draw_block_border_rounded_uniform_solid_smoke() {
+        // has_radius && uniform_width && uniform_style && Solid
+        // → rounded-rect stroke path (lines 1441-1458 in draw_block_border).
+        let style = BlockStyle {
+            border_color: [0, 0, 0, 255],
+            border_widths: [2.0, 2.0, 2.0, 2.0],
+            border_styles: [BorderStyleValue::Solid; 4],
+            border_radii: [[4.0, 4.0]; 4],
+            ..Default::default()
+        };
+        with_canvas_smoke(|canvas| {
+            draw_block_border(canvas, &style, 0.0, 0.0, 80.0, 80.0);
+        });
+    }
+
+    #[test]
+    fn draw_block_border_double_uniform_rect_smoke() {
+        // !has_radius && uniform_width && uniform_style && Double (≥ 3pt)
+        // → two stroke_inset_rect calls (lines 1473-1476), covering
+        //   stroke_inset_rect (1307-1308) and colored_stroke (1323-1324).
+        let style = BlockStyle {
+            border_color: [0, 0, 100, 255],
+            border_widths: [6.0, 6.0, 6.0, 6.0],
+            border_styles: [BorderStyleValue::Double; 4],
+            ..Default::default()
+        };
+        with_canvas_smoke(|canvas| {
+            draw_block_border(canvas, &style, 0.0, 0.0, 80.0, 80.0);
+        });
+    }
+
+    #[test]
+    fn draw_block_border_nonuniform_solid_per_side_smoke() {
+        // Non-uniform widths → per-side fallback (lines 1485-1545).
+        // Each draw_border_line call hits the `_` arm → colored_stroke +
+        // apply_border_style(Solid) + stroke_line.
+        let style = BlockStyle {
+            border_color: [200, 100, 0, 255],
+            border_widths: [2.0, 4.0, 2.0, 4.0],
+            border_styles: [BorderStyleValue::Solid; 4],
+            ..Default::default()
+        };
+        with_canvas_smoke(|canvas| {
+            draw_block_border(canvas, &style, 0.0, 0.0, 80.0, 80.0);
+        });
+    }
+
+    #[test]
+    fn draw_block_border_groove_per_side_smoke() {
+        // Groove is not in the Solid|Double fast path, so it always goes
+        // to the per-side fallback even with uniform widths.
+        // draw_border_line Groove arm (lines 1369-1397).
+        let style = BlockStyle {
+            border_color: [128, 128, 128, 255],
+            border_widths: [4.0, 4.0, 4.0, 4.0],
+            border_styles: [BorderStyleValue::Groove; 4],
+            ..Default::default()
+        };
+        with_canvas_smoke(|canvas| {
+            draw_block_border(canvas, &style, 0.0, 0.0, 80.0, 80.0);
+        });
+    }
+
+    #[test]
+    fn draw_block_border_ridge_per_side_smoke() {
+        let style = BlockStyle {
+            border_color: [128, 128, 128, 255],
+            border_widths: [4.0, 4.0, 4.0, 4.0],
+            border_styles: [BorderStyleValue::Ridge; 4],
+            ..Default::default()
+        };
+        with_canvas_smoke(|canvas| {
+            draw_block_border(canvas, &style, 0.0, 0.0, 80.0, 80.0);
+        });
+    }
+
+    #[test]
+    fn draw_block_border_inset_per_side_smoke() {
+        // draw_border_line Inset arm (lines 1399-1408).
+        let style = BlockStyle {
+            border_color: [128, 128, 128, 255],
+            border_widths: [4.0, 4.0, 4.0, 4.0],
+            border_styles: [BorderStyleValue::Inset; 4],
+            ..Default::default()
+        };
+        with_canvas_smoke(|canvas| {
+            draw_block_border(canvas, &style, 0.0, 0.0, 80.0, 80.0);
+        });
+    }
+
+    #[test]
+    fn draw_block_border_outset_per_side_smoke() {
+        let style = BlockStyle {
+            border_color: [128, 128, 128, 255],
+            border_widths: [4.0, 4.0, 4.0, 4.0],
+            border_styles: [BorderStyleValue::Outset; 4],
+            ..Default::default()
+        };
+        with_canvas_smoke(|canvas| {
+            draw_block_border(canvas, &style, 0.0, 0.0, 80.0, 80.0);
+        });
+    }
+
+    #[test]
+    fn draw_block_border_per_side_double_width_smoke() {
+        // Non-uniform widths force per-side; top uses Double ≥ 3pt →
+        // draw_border_line Double arm (lines 1354-1367).
+        let style = BlockStyle {
+            border_color: [0, 0, 0, 255],
+            border_widths: [6.0, 2.0, 2.0, 2.0],
+            border_styles: [
+                BorderStyleValue::Double,
+                BorderStyleValue::Solid,
+                BorderStyleValue::Solid,
+                BorderStyleValue::Solid,
+            ],
+            ..Default::default()
+        };
+        with_canvas_smoke(|canvas| {
+            draw_block_border(canvas, &style, 0.0, 0.0, 80.0, 80.0);
+        });
+    }
 }
 
 #[cfg(test)]
