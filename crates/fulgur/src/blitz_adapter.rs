@@ -1998,6 +1998,17 @@ impl CounterPass {
                         None => out.push(' '),
                     }
                 }
+                // `attr(<name>)` in pseudo content. Now that multi-item
+                // lists route through here (fulgur-2ykw), `[" attr(x) "]`
+                // must resolve the attribute rather than drop it. Missing
+                // attributes resolve to the empty string (CSS Values 3
+                // §attr() fallback grammar is not parsed by
+                // `parse_content_value`, so there is no author fallback).
+                ContentItem::Attr(name) => {
+                    if let Some(v) = element.and_then(|el| get_attr(el, name)) {
+                        out.push_str(v);
+                    }
+                }
                 _ => {}
             }
         }

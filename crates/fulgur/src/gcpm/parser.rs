@@ -728,13 +728,26 @@ impl<'i, 'a> DeclarationParser<'i> for StyleRuleParser<'a> {
                         | ContentItem::TargetText { .. }
                 )
             });
+            // blitz-dom 0.2.4's `flush_pseudo_elements`
+            // (`construct.rs:367`) materializes only `items[0]` of a
+            // pseudo element's multi-item `Content::Items` list, so a
+            // plain `content: "[" "x" "]"` would render just the leading
+            // `[`. Route ANY multi-item content (not only counter-bearing
+            // lists) through CounterPass, which flattens every item into
+            // a single resolved string and injects it as a synthetic
+            // single-item rule Blitz can render in full (fulgur-2ykw).
+            // Single-item plain content stays on Blitz's native path —
+            // `items[0]` IS the whole value there, so no truncation and
+            // no behavior change.
+            let route_via_counter_pass = has_counter || items.len() > 1;
             // Last-declaration-wins: always update content_items (clear when
-            // the new content has no counter()).
-            if has_counter {
+            // the new content needs no CounterPass handling).
+            if route_via_counter_pass {
                 *self.content_items = Some(items);
-                // Strip the original `content: counter(...)` from cleaned CSS
-                // because Blitz cannot evaluate counter() — CounterPass injects
-                // a synthetic ::before/::after rule with the resolved value.
+                // Strip the original `content: ...` from cleaned CSS so
+                // Blitz does not also render its (truncated) view —
+                // CounterPass injects a synthetic ::before/::after rule
+                // with the fully resolved value.
                 let start = decl_start.position().byte_index();
                 let end = input.position().byte_index();
                 self.edits.push(CssEdit::Replace {
