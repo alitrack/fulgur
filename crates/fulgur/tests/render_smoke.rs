@@ -3721,20 +3721,22 @@ fn target_text_before_resolves_attr_pseudo() {
 /// content for `#s::after` directly. The regression Task 2 must not
 /// reintroduce is a panic / `None` on that read.
 ///
-/// This is a no-panic smoke guard, not a text-layer assertion, and that
-/// is deliberate: the *text-layer* behaviour of counter-tracked
-/// `target-text` is already verified by
-/// `target_text_second_arg_resolves_target_fragments` (which renders the
-/// captured counter-tracked value through an `@page` margin box and
-/// asserts `AfterFrag1` via `pdftotext`). A text assertion *here* is not
-/// possible because fulgur's *element* `::before`/`::after` renderer has
-/// a pre-existing, unrelated limitation: multi-item generated content
-/// only emits its first item (reproduces with plain
-/// `content: "[" "x" "]"` — no `counter()`, no `target-*` — so it cannot
-/// originate in Tasks 2-3's read-only, `has_target_references`-gated
-/// capture). That element-pseudo truncation is out of scope for this PR
-/// and tracked separately. The capture itself (Tasks 2-3) is text-layer
-/// proven by tests #1/#3/#4 below and by `..._second_arg...`.
+/// This stays a no-panic smoke guard, NOT a text-layer assertion.
+/// fulgur-2ykw fixed the multi-item element-pseudo truncation for the
+/// normal path (AssetBundle / `<link>` CSS, and inline `<style>` with
+/// tag/class selectors), so plain `content: "[" "x" "]"` and 3-item
+/// `counter()` lists now render fully (see
+/// `pseudo_multi_item_content_renders_all_items` and
+/// `pseudo_three_item_counter_content_before_and_single_item_unchanged`).
+/// But this test uniquely combines an **inline `<style>` + ID selector**
+/// (`#s::after`): the CounterPass-injected resolved value
+/// (`[data-fulgur-cid]` specificity `0,1,0`) loses the cascade to the
+/// surviving author `#s` rule (`1,0,0`), because inline `<style>` text
+/// is not rewritten to `cleaned_css` (it cannot be — RunningElementPass
+/// and friends depend on the original inline text persisting). That
+/// separate specificity-collision root cause is tracked in fulgur-da3u;
+/// once it lands, this can become a real `[2]` text-layer assertion
+/// (fulgur-2ykw acceptance criterion #4, deferred there).
 #[test]
 fn target_text_after_resolves_counter_via_counter_pass() {
     let html = r##"<!doctype html><html><head><style>
@@ -3810,6 +3812,76 @@ fn target_text_empty_for_missing_pseudo() {
          missing `::before` should resolve target-text to the empty \
          string, leaving the surrounding brackets adjacent (`[]`, not \
          `[X]`). Looked for {needle} in {} bytes of decompressed streams.",
+        lower.len()
+    );
+}
+
+/// fulgur-2ykw: a multi-item element `::after` content list — pure
+/// strings, NO `counter()` / `target-*` so the GCPM scan does not route
+/// it through the `CounterPass` flattening workaround — must render ALL
+/// items in order to the PDF text layer, not just the first. Before the
+/// fix, blitz-dom 0.2.4's `flush_pseudo_elements` materialized only
+/// `items[0]`, so only the leading `[` reached the text layer.
+#[test]
+fn pseudo_multi_item_content_renders_all_items() {
+    let html = r##"<!doctype html><html><head><style>
+      body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; }
+      p::after { content: "[" "x" "]"; }
+    </style></head><body>
+      <p>Body text</p>
+    </body></html>"##;
+    let pdf = tagged_render_with_noto(html);
+    assert!(!pdf.is_empty());
+
+    let lower = decompressed_streams_lower(&pdf);
+    let needle = hex_utf16be("[x]");
+    assert!(
+        lower.contains(&needle.to_ascii_lowercase()),
+        "ActualText missing UTF-16BE for the contiguous `[x]` — a \
+         multi-item `::after` content list must render ALL items, not \
+         just the first `[`. Looked for {needle} in {} bytes of \
+         decompressed streams.",
+        lower.len()
+    );
+}
+
+/// fulgur-2ykw: the canonical 3-item case — open-bracket string +
+/// `counter()` + close-bracket string — on `::before` (the spec sibling
+/// of the `::after` path; both go through blitz-dom's shared
+/// `flush_pseudo_elements`). All three items must reach the text layer
+/// contiguously as `[1]`, and single-item content elsewhere on the page
+/// must stay unchanged.
+#[test]
+fn pseudo_three_item_counter_content_before_and_single_item_unchanged() {
+    let html = r##"<!doctype html><html><head><style>
+      body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; counter-reset: c; }
+      h2 { counter-increment: c; }
+      h2::before { content: "[" counter(c) "]"; }
+      p::after { content: "."; }
+    </style></head><body>
+      <h2>Section</h2>
+      <p>Body</p>
+    </body></html>"##;
+    let pdf = tagged_render_with_noto(html);
+    assert!(!pdf.is_empty());
+
+    let lower = decompressed_streams_lower(&pdf);
+    let three_item = hex_utf16be("[1]");
+    assert!(
+        lower.contains(&three_item.to_ascii_lowercase()),
+        "ActualText missing UTF-16BE for the contiguous `[1]` — a 3-item \
+         `::before` content list (string + counter() + string) must \
+         render ALL items in order. Looked for {three_item} in {} bytes.",
+        lower.len()
+    );
+    // Single-item plain `::after` content still renders (Blitz native
+    // path, unchanged): the lone `.` is present.
+    let single = hex_utf16be(".");
+    assert!(
+        lower.contains(&single.to_ascii_lowercase()),
+        "ActualText missing UTF-16BE for the single-item `.` — \
+         single-item pseudo content must keep rendering via Blitz's \
+         native path. Looked for {single} in {} bytes.",
         lower.len()
     );
 }
