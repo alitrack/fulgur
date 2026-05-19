@@ -5199,4 +5199,348 @@ mod tests {
         let (_, clip, _) = build_page_skip_sets(&d);
         assert!(clip.is_empty(), "empty clip_descendants → nothing added");
     }
+
+    // --- build_multicol_stroke ---
+    //
+    // Covers every branch: width≤0 or style=None → None; Solid → no dash;
+    // Dashed → [w*3, w*2] dash; Dotted → round cap + [0, w*2] dash.
+
+    #[test]
+    fn build_multicol_stroke_none_style_returns_none() {
+        let rule = crate::column_css::ColumnRuleSpec {
+            width: 2.0,
+            style: crate::column_css::ColumnRuleStyle::None,
+            color: [0, 0, 0, 255],
+        };
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_zero_width_returns_none() {
+        let rule = crate::column_css::ColumnRuleSpec {
+            width: 0.0,
+            style: crate::column_css::ColumnRuleStyle::Solid,
+            color: [0, 0, 0, 255],
+        };
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_negative_width_returns_none() {
+        let rule = crate::column_css::ColumnRuleSpec {
+            width: -1.0,
+            style: crate::column_css::ColumnRuleStyle::Solid,
+            color: [0, 0, 0, 255],
+        };
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_solid_returns_some_with_no_dash() {
+        let rule = crate::column_css::ColumnRuleSpec {
+            width: 2.0,
+            style: crate::column_css::ColumnRuleStyle::Solid,
+            color: [0, 0, 0, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).expect("Solid should return Some");
+        assert!(stroke.dash.is_none(), "Solid stroke must have no dash");
+        assert!((stroke.width - 2.0).abs() < 0.001, "width should be 2.0");
+    }
+
+    #[test]
+    fn build_multicol_stroke_dashed_has_dash_pattern() {
+        let rule = crate::column_css::ColumnRuleSpec {
+            width: 3.0,
+            style: crate::column_css::ColumnRuleStyle::Dashed,
+            color: [0, 0, 0, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).expect("Dashed should return Some");
+        let dash = stroke.dash.expect("Dashed stroke should have a dash");
+        // width=3 → dash array = [w*3, w*2] = [9, 6]
+        assert_eq!(dash.array.len(), 2, "dash array should have two elements");
+        assert!(
+            (dash.array[0] - 9.0).abs() < 0.001,
+            "dash on = w*3 = 9.0, got {}",
+            dash.array[0]
+        );
+        assert!(
+            (dash.array[1] - 6.0).abs() < 0.001,
+            "dash off = w*2 = 6.0, got {}",
+            dash.array[1]
+        );
+    }
+
+    #[test]
+    fn build_multicol_stroke_dotted_has_round_cap_and_dot_pattern() {
+        let rule = crate::column_css::ColumnRuleSpec {
+            width: 2.0,
+            style: crate::column_css::ColumnRuleStyle::Dotted,
+            color: [0, 0, 0, 255],
+        };
+        let stroke = build_multicol_stroke(&rule).expect("Dotted should return Some");
+        assert_eq!(
+            stroke.line_cap,
+            krilla::paint::LineCap::Round,
+            "Dotted must use round line cap"
+        );
+        let dash = stroke.dash.expect("Dotted stroke should have a dash");
+        // width=2 → dash array = [0, w*2] = [0, 4]
+        assert_eq!(dash.array.len(), 2, "dash array should have two elements");
+        assert!(
+            (dash.array[0] - 0.0).abs() < 0.001,
+            "dot on = 0.0, got {}",
+            dash.array[0]
+        );
+        assert!(
+            (dash.array[1] - 4.0).abs() < 0.001,
+            "dot off = w*2 = 4.0, got {}",
+            dash.array[1]
+        );
+    }
+
+    // --- build_tag_group: identifiers path ---
+    //
+    // Exercises the `else if let Some(ids) = identifiers.get(&node_id)` branch
+    // that fires when `run_entries` has no entry for the node.
+
+    #[test]
+    fn build_tag_group_identifiers_path_creates_one_leaf_per_id() {
+        let node_id: crate::drawables::NodeId = 50;
+        let id1 = make_identifier();
+        let id2 = make_identifier();
+
+        let mut identifiers: BTreeMap<crate::drawables::NodeId, Vec<Identifier>> = BTreeMap::new();
+        identifiers.insert(node_id, vec![id1, id2]);
+
+        let run_entries: BTreeMap<
+            crate::drawables::NodeId,
+            Vec<crate::draw_primitives::ParagraphRunItem>,
+        > = BTreeMap::new();
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let children_map: BTreeMap<crate::drawables::NodeId, Vec<crate::drawables::NodeId>> =
+            BTreeMap::new();
+        let heading_titles: BTreeMap<crate::drawables::NodeId, String> = BTreeMap::new();
+
+        let drawables = drawables_with_para(node_id);
+        let group = build_tag_group(
+            node_id,
+            &drawables,
+            &identifiers,
+            &heading_titles,
+            &children_map,
+            &run_entries,
+            &link_annot_ids,
+        );
+
+        assert_eq!(group.children.len(), 2, "two ids → two Leaf nodes");
+        assert!(
+            matches!(group.children[0], Node::Leaf(_)),
+            "first child should be Leaf"
+        );
+        assert!(
+            matches!(group.children[1], Node::Leaf(_)),
+            "second child should be Leaf"
+        );
+    }
+
+    // --- build_tag_group: consecutive LinkContent items with same span_ptr ---
+    //
+    // Two consecutive LinkContent entries sharing span_ptr 77 (multi-page link)
+    // should be collapsed into one Link TagGroup with both content leaves plus
+    // the OBJR leaf appended afterwards.
+
+    #[test]
+    fn build_tag_group_consecutive_link_runs_same_ptr_grouped_together() {
+        let node_id: crate::drawables::NodeId = 60;
+        let id_a = make_identifier();
+        let id_b = make_identifier();
+        let annot_id = make_identifier();
+
+        let mut run_entries: BTreeMap<
+            crate::drawables::NodeId,
+            Vec<crate::draw_primitives::ParagraphRunItem>,
+        > = BTreeMap::new();
+        run_entries.insert(
+            node_id,
+            vec![
+                crate::draw_primitives::ParagraphRunItem::LinkContent {
+                    span_ptr: 77,
+                    identifier: id_a,
+                },
+                crate::draw_primitives::ParagraphRunItem::LinkContent {
+                    span_ptr: 77,
+                    identifier: id_b,
+                },
+            ],
+        );
+
+        let mut link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        link_annot_ids.entry(77).or_default().push(annot_id);
+
+        let identifiers: BTreeMap<crate::drawables::NodeId, Vec<Identifier>> = BTreeMap::new();
+        let heading_titles: BTreeMap<crate::drawables::NodeId, String> = BTreeMap::new();
+        let children_map: BTreeMap<crate::drawables::NodeId, Vec<crate::drawables::NodeId>> =
+            BTreeMap::new();
+
+        let drawables = drawables_with_para(node_id);
+        let group = build_tag_group(
+            node_id,
+            &drawables,
+            &identifiers,
+            &heading_titles,
+            &children_map,
+            &run_entries,
+            &link_annot_ids,
+        );
+
+        // Two consecutive LinkContent items with same ptr → one Link Group.
+        assert_eq!(
+            group.children.len(),
+            1,
+            "consecutive link runs should form one group"
+        );
+        assert!(
+            matches!(group.children[0], Node::Group(_)),
+            "should be a Link Group"
+        );
+        if let Node::Group(link_group) = &group.children[0] {
+            // id_a leaf + id_b leaf + annot_id leaf = 3 children.
+            assert_eq!(
+                link_group.children.len(),
+                3,
+                "link group: id_a + id_b + annot = 3 children"
+            );
+        }
+    }
+
+    // --- build_tag_group: children_map path ---
+    //
+    // When `children_map` has entries for the node, child groups are appended
+    // after any Leaf / run items.
+
+    #[test]
+    fn build_tag_group_child_nodes_appended_from_children_map() {
+        let parent_id: crate::drawables::NodeId = 70;
+        let child_id: crate::drawables::NodeId = 71;
+        let parent_identifier = make_identifier();
+        let child_identifier = make_identifier();
+
+        let mut identifiers: BTreeMap<crate::drawables::NodeId, Vec<Identifier>> = BTreeMap::new();
+        identifiers.insert(parent_id, vec![parent_identifier]);
+        identifiers.insert(child_id, vec![child_identifier]);
+
+        let run_entries: BTreeMap<
+            crate::drawables::NodeId,
+            Vec<crate::draw_primitives::ParagraphRunItem>,
+        > = BTreeMap::new();
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let heading_titles: BTreeMap<crate::drawables::NodeId, String> = BTreeMap::new();
+        let mut children_map: BTreeMap<crate::drawables::NodeId, Vec<crate::drawables::NodeId>> =
+            BTreeMap::new();
+        children_map.insert(parent_id, vec![child_id]);
+
+        let mut drawables = drawables_with_para(parent_id);
+        drawables.semantics.insert(
+            child_id,
+            crate::tagging::SemanticEntry {
+                tag: crate::tagging::PdfTag::Span,
+                parent: Some(parent_id),
+                alt_text: None,
+            },
+        );
+
+        let group = build_tag_group(
+            parent_id,
+            &drawables,
+            &identifiers,
+            &heading_titles,
+            &children_map,
+            &run_entries,
+            &link_annot_ids,
+        );
+
+        // parent_id Leaf then child Group.
+        assert_eq!(
+            group.children.len(),
+            2,
+            "parent leaf + child group = 2 children"
+        );
+        assert!(
+            matches!(group.children[0], Node::Leaf(_)),
+            "first child should be parent Leaf"
+        );
+        assert!(
+            matches!(group.children[1], Node::Group(_)),
+            "second child should be child Group"
+        );
+    }
+
+    // --- paragraph_lines_for_page: 3-page scenario ---
+
+    #[test]
+    fn paragraph_lines_for_page_split_three_pages_middle_page_correct() {
+        // 3 lines of 12pt each, one per page (16px CSS per fragment, 16px×0.75=12pt).
+        // Page 1: consumed = px_to_pt(16px) = 12pt → baseline 21pt rebased to 9pt.
+        let lines = vec![
+            make_line(12.0, 9.0),  // page 0
+            make_line(12.0, 21.0), // page 1
+            make_line(12.0, 33.0), // page 2
+        ];
+        let fragments = vec![
+            make_fragment(0, 16.0),
+            make_fragment(1, 16.0),
+            make_fragment(2, 16.0),
+        ];
+        let result = paragraph_lines_for_page(&lines, &fragments, 1, true);
+        assert!(result.is_some(), "page 1 should yield Some");
+        let sliced = result.unwrap();
+        assert_eq!(sliced.len(), 1, "one line on page 1");
+        assert!(
+            (sliced[0].baseline - 9.0).abs() < 0.01,
+            "baseline rebased: 21pt - 12pt consumed = 9pt, got {}",
+            sliced[0].baseline,
+        );
+    }
+
+    // --- paragraph_lines_for_page: InlineBox computed_y is not rebased ---
+    //
+    // Only `LineItem::Image::computed_y` is rebased by the split operation;
+    // `LineItem::InlineBox::computed_y` stays line-relative and must not change.
+
+    #[test]
+    fn paragraph_lines_for_page_split_inline_box_computed_y_not_rebased() {
+        let ib = crate::paragraph::InlineBoxItem {
+            node_id: None,
+            width: 30.0,
+            height: 20.0,
+            x_offset: 0.0,
+            computed_y: 50.0, // must remain 50.0 after split
+            link: None,
+            opacity: 1.0,
+            visible: true,
+        };
+        let line0 = make_line(12.0, 9.0);
+        let line1 = crate::paragraph::ShapedLine {
+            height: 12.0,
+            baseline: 21.0,
+            items: vec![crate::paragraph::LineItem::InlineBox(ib)],
+        };
+        let fragments = vec![
+            make_fragment(0, 16.0), // 16px = 12pt
+            make_fragment(1, 16.0),
+        ];
+        let result = paragraph_lines_for_page(&[line0, line1], &fragments, 1, true);
+        assert!(result.is_some(), "page 1 should yield Some");
+        let sliced = result.unwrap();
+        assert_eq!(sliced.len(), 1, "one line on page 1");
+        if let crate::paragraph::LineItem::InlineBox(ib) = &sliced[0].items[0] {
+            assert!(
+                (ib.computed_y - 50.0).abs() < 0.01,
+                "InlineBox computed_y must not be rebased, got {}",
+                ib.computed_y,
+            );
+        } else {
+            panic!("expected InlineBox item in sliced line");
+        }
+    }
 }
