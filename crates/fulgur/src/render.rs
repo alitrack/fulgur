@@ -5199,4 +5199,145 @@ mod tests {
         let (_, clip, _) = build_page_skip_sets(&d);
         assert!(clip.is_empty(), "empty clip_descendants → nothing added");
     }
+
+    // --- build_tag_group: multiple consecutive LinkContent with same span_ptr ---
+
+    #[test]
+    fn build_tag_group_consecutive_link_content_same_ptr_coalesced() {
+        // Two consecutive LinkContent items with the same span_ptr should both
+        // be collected into the single Link TagGroup by the inner while-loop
+        // (lines 3914-3922). The resulting group gets one Link child that itself
+        // contains two Leaf items plus one OBJR Leaf.
+        let node_id: crate::drawables::NodeId = 60;
+        let id1 = make_identifier();
+        let id2 = make_identifier();
+        let annot_id = make_identifier();
+
+        let mut run_entries: BTreeMap<
+            crate::drawables::NodeId,
+            Vec<crate::draw_primitives::ParagraphRunItem>,
+        > = BTreeMap::new();
+        run_entries.insert(
+            node_id,
+            vec![
+                crate::draw_primitives::ParagraphRunItem::LinkContent {
+                    span_ptr: 88,
+                    identifier: id1,
+                },
+                crate::draw_primitives::ParagraphRunItem::LinkContent {
+                    span_ptr: 88, // same ptr → both end up in the same Link group
+                    identifier: id2,
+                },
+            ],
+        );
+
+        let mut link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        link_annot_ids.entry(88).or_default().push(annot_id);
+
+        let drawables = drawables_with_para(node_id);
+        let identifiers: BTreeMap<crate::drawables::NodeId, Vec<Identifier>> = BTreeMap::new();
+        let heading_titles: BTreeMap<crate::drawables::NodeId, String> = BTreeMap::new();
+        let children_map: BTreeMap<crate::drawables::NodeId, Vec<crate::drawables::NodeId>> =
+            BTreeMap::new();
+
+        let group = build_tag_group(
+            node_id,
+            &drawables,
+            &identifiers,
+            &heading_titles,
+            &children_map,
+            &run_entries,
+            &link_annot_ids,
+        );
+
+        // Both LinkContent items and the OBJR should be in a single Link Group.
+        assert_eq!(group.children.len(), 1, "one Link Group for both items");
+        assert!(
+            matches!(
+                &group.children[0],
+                Node::Group(g) if g.children.len() == 3
+            ),
+            "Link Group should contain two content Leaves + one OBJR Leaf"
+        );
+    }
+
+    // --- build_struct_tree: `continue` when heading_title already in map ---
+
+    #[test]
+    fn build_struct_tree_skip_backfill_when_heading_title_already_known() {
+        // A node appears in both tc.record (with a heading_title) and tc.record_run.
+        // After the tc_entries loop heading_titles[node_id] is populated, so the
+        // backfill loop's `if heading_titles.contains_key(&node_id) { continue }`
+        // branch fires and the title is not overwritten.
+        let node_id: usize = 70;
+        let tc_id = make_identifier();
+        let run_id = make_identifier();
+
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        // Record via tc.record with an explicit title → fills heading_titles.
+        tc.record(
+            node_id,
+            crate::tagging::PdfTag::H { level: 1 },
+            tc_id,
+            Some("Already Known Title".to_string()),
+        );
+        // Also record a run entry for the same node → it ends up in run_entries.
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(run_id),
+        );
+
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_h1_semantic_entry(None));
+        // Add a paragraph with text so backfill *would* produce a different title
+        // if the `continue` were not taken.
+        let text_line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "Backfill Title",
+            None,
+        ))]);
+        d.paragraphs.insert(node_id, make_para(vec![text_line]));
+
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        // Should not panic; the continue short-circuits the backfill path.
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(
+            tree.children.len(),
+            1,
+            "node_id should appear as one root Group"
+        );
+    }
+
+    // --- build_struct_tree: run_entry with P tag does not backfill heading title ---
+
+    #[test]
+    fn build_struct_tree_run_entry_with_p_tag_does_not_backfill_title() {
+        // Node is in run_entries with a PdfTag::P semantic entry.
+        // The backfill loop checks `if matches!(entry.tag, PdfTag::H { .. })`;
+        // for PdfTag::P this is false, so heading_titles is NOT populated.
+        let node_id: usize = 80;
+        let run_id = make_identifier();
+
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(run_id),
+        );
+
+        let mut d = Drawables::new();
+        // P tag — not a heading, so backfill is skipped.
+        d.semantics.insert(node_id, make_p_semantic_entry(None));
+        let text_line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "Paragraph text",
+            None,
+        ))]);
+        d.paragraphs.insert(node_id, make_para(vec![text_line]));
+
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        // Tree should still be built (one root Group from run_entries).
+        assert_eq!(tree.children.len(), 1, "P node appears as one root Group");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
 }
