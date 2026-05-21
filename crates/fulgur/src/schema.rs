@@ -792,4 +792,171 @@ mod tests {
         assert_eq!(schema["properties"]["title"]["type"], "string");
         assert_eq!(schema["properties"]["subtitle"]["type"], "string");
     }
+
+    // --- Additional tests for uncovered branches ---
+
+    #[test]
+    fn test_parse_error_returns_err() {
+        assert!(extract_schema("{{ unclosed", "bad.html").is_err());
+        assert!(extract_schema_with_data("{{ unclosed", "bad.html", &json!({})).is_err());
+    }
+
+    #[test]
+    fn test_schema_with_data_non_object_input() {
+        // data is a JSON array, not an object → properties stays empty
+        let schema = extract_schema_with_data("{{ x }}", "t.html", &json!([1, 2, 3])).unwrap();
+        assert!(
+            schema["properties"]
+                .as_object()
+                .map_or(true, |m| m.is_empty())
+        );
+    }
+
+    #[test]
+    fn test_value_to_schema_bool_and_null() {
+        let data = json!({"active": true, "nothing": null});
+        let schema =
+            extract_schema_with_data("{{ active }}{{ nothing }}", "t.html", &data).unwrap();
+        assert_eq!(schema["properties"]["active"]["type"], "boolean");
+        assert_eq!(schema["properties"]["nothing"]["type"], "null");
+    }
+
+    #[test]
+    fn test_for_loop_with_filter_iterator() {
+        // `items | sort` is a Filter expr — iter_path is None → item becomes local
+        let schema = extract_schema(
+            "{% for item in items | sort %}{{ title }}{% endfor %}",
+            "t.html",
+        )
+        .unwrap();
+        // "items" collected via filter base; "title" is top-level
+        assert_eq!(schema["properties"]["items"]["type"], "string");
+        assert_eq!(schema["properties"]["title"]["type"], "string");
+        // "item" is local — must not leak
+        assert!(schema["properties"]["item"].is_null());
+    }
+
+    #[test]
+    fn test_set_block_creates_local_variable() {
+        let schema = extract_schema(
+            "{% set content %}{{ val }}{% endset %}{{ other }}",
+            "t.html",
+        )
+        .unwrap();
+        // content is a SetBlock variable — must not appear in schema
+        assert!(schema["properties"]["content"].is_null());
+        // val inside the block body and other after are top-level
+        assert_eq!(schema["properties"]["val"]["type"], "string");
+        assert_eq!(schema["properties"]["other"]["type"], "string");
+    }
+
+    #[test]
+    fn test_if_cond_as_last_stmt_no_trailing_content() {
+        // IfCond is the last (only) statement in the template — exercises the
+        // "no remaining siblings" path in collect_from_stmts.
+        let schema = extract_schema(
+            "{% if cond %}{% set x = user %}{% else %}{% set x = admin %}{% endif %}",
+            "t.html",
+        )
+        .unwrap();
+        // Both RHS paths are collected conservatively
+        assert_eq!(schema["properties"]["user"]["type"], "string");
+        assert_eq!(schema["properties"]["admin"]["type"], "string");
+        // x is set-local in both branches — must not appear
+        assert!(schema["properties"]["x"].is_null());
+    }
+
+    #[test]
+    fn test_filter_block_collects_body_vars() {
+        let schema =
+            extract_schema("{% filter upper %}{{ name }}{% endfilter %}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["name"]["type"], "string");
+    }
+
+    #[test]
+    fn test_autoescape_block_collects_body_vars() {
+        let schema = extract_schema(
+            "{% autoescape false %}{{ content }}{% endautoescape %}",
+            "t.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["content"]["type"], "string");
+    }
+
+    #[test]
+    fn test_test_expression_collects_subject() {
+        // `value is defined` creates an Expr::Test node
+        let schema =
+            extract_schema("{% if value is defined %}{{ value }}{% endif %}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["value"]["type"], "string");
+    }
+
+    #[test]
+    fn test_binop_collects_both_operands() {
+        // `a ~ b` is a BinOp (string concatenation)
+        let schema = extract_schema("{{ a ~ b }}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["a"]["type"], "string");
+        assert_eq!(schema["properties"]["b"]["type"], "string");
+    }
+
+    #[test]
+    fn test_unary_op_collects_operand() {
+        let schema = extract_schema("{% if not flag %}{{ x }}{% endif %}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["flag"]["type"], "string");
+        assert_eq!(schema["properties"]["x"]["type"], "string");
+    }
+
+    #[test]
+    fn test_if_expr_collects_all_branches() {
+        // `title if show else subtitle` is an Expr::IfExpr
+        let schema = extract_schema("{{ title if show else subtitle }}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["title"]["type"], "string");
+        assert_eq!(schema["properties"]["show"]["type"], "string");
+        assert_eq!(schema["properties"]["subtitle"]["type"], "string");
+    }
+
+    #[test]
+    fn test_map_literal_collects_variable_values() {
+        // Keys are string constants; values are variables
+        let schema = extract_schema(r#"{{ {"label": title, "val": count} }}"#, "t.html").unwrap();
+        assert_eq!(schema["properties"]["title"]["type"], "string");
+        assert_eq!(schema["properties"]["count"]["type"], "string");
+    }
+
+    #[test]
+    fn test_loop_builtin_excluded_from_schema() {
+        // `loop` is a Jinja builtin — resolve_expr_path returns None for it
+        let schema = extract_schema(
+            "{% for item in items %}{{ loop.index }}{% endfor %}",
+            "t.html",
+        )
+        .unwrap();
+        assert!(schema["properties"]["loop"].is_null());
+        assert_eq!(schema["properties"]["items"]["type"], "array");
+    }
+
+    #[test]
+    fn test_ensure_array_upgrades_existing_string() {
+        // `{{ items }}` first registers items as String; the for loop then
+        // promotes it to Array via ensure_array_at_path.
+        let schema = extract_schema(
+            "{{ items }}{% for item in items %}{{ item }}{% endfor %}",
+            "t.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["items"]["type"], "array");
+    }
+
+    #[test]
+    fn test_ensure_array_nested_iter_path() {
+        // `foo.items` as iterator: ensure_array_at_path recurses into foo's children
+        let schema = extract_schema(
+            "{% for item in foo.items %}{{ item }}{% endfor %}",
+            "t.html",
+        )
+        .unwrap();
+        let foo = &schema["properties"]["foo"];
+        assert_eq!(foo["type"], "object");
+        assert_eq!(foo["properties"]["items"]["type"], "array");
+    }
 }
