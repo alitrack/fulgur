@@ -79,8 +79,10 @@ inline-`<style>` の経路は設計上非対称（DOM presence・パス順序が
 
 `#main #s::after` のような **ID 持ち祖先セレクタ** `(2,0,2)` には
 負けうる。要素自身の compound からは祖先の specificity を再現できない
-ため。acceptance criteria は単一 compound `#id` をスコープとしており
-対象外。実ケースが出たら follow-up issue で扱う。
+ため。同じバケツに、疑似クラスを積み重ねた単一 compound
+（`#s:not(.x):not(.y)::after` = `(1,2,1)`）も入る — 再構成した
+`(1,1,2)` を上回る。いずれも acceptance criteria のスコープ（単一
+compound `#id`）外。実ケースが出たら follow-up issue で扱う。
 
 ## 実装
 
