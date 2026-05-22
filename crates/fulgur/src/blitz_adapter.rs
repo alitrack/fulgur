@@ -1864,6 +1864,27 @@ impl CounterPass {
             None
         };
 
+        // Reconstruct the element's own compound (`tag#id.class`) so the
+        // injected rule out-specifies any author rule that survives in
+        // the DOM and targets the same element — the inline-`<style>`
+        // cascade collision fixed in fulgur-da3u. `[data-fulgur-cid]`
+        // already pins the element uniquely; this prefix only raises
+        // specificity. Computed once: the element's identity does not
+        // change during child traversal, so `::before` and `::after`
+        // share it.
+        //
+        // Order matters: this runs *after* the `attr_value` block set the
+        // `data-fulgur-cid` attribute. That is safe because
+        // `element_specificity_prefix` reads only `id` / `class` — never
+        // `data-fulgur-cid` — so the just-injected attribute does not
+        // leak into the prefix. A future change that widens the prefix to
+        // arbitrary attributes would have to move this above that block.
+        let specificity_prefix = if attr_value.is_some() {
+            element_specificity_prefix(doc.get_node(node_id).and_then(|n| n.element_data()))
+        } else {
+            String::new()
+        };
+
         // Resolve ::before now (before child traversal)
         if let Some(ref cid) = attr_value {
             use std::fmt::Write;
@@ -1874,7 +1895,8 @@ impl CounterPass {
                 let resolved = self.resolve_content(&mapping.content, element);
                 let _ = write!(
                     css,
-                    "[data-fulgur-cid=\"{}\"]::before{{content:\"{}\"}}",
+                    "{}[data-fulgur-cid=\"{}\"]::before{{content:\"{}\"}}",
+                    specificity_prefix,
                     cid,
                     css_escape_string(&resolved)
                 );
@@ -1900,7 +1922,8 @@ impl CounterPass {
                 let resolved = self.resolve_content(&mapping.content, element);
                 let _ = write!(
                     css,
-                    "[data-fulgur-cid=\"{}\"]::after{{content:\"{}\"}}",
+                    "{}[data-fulgur-cid=\"{}\"]::after{{content:\"{}\"}}",
+                    specificity_prefix,
                     cid,
                     css_escape_string(&resolved)
                 );
@@ -2301,6 +2324,86 @@ fn css_escape_string(s: &str) -> String {
         }
     }
     out
+}
+
+/// Serialize a string as a CSS identifier per the CSSOM
+/// [serialize an identifier][algo] algorithm — the same logic as the
+/// JavaScript `CSS.escape()` function.
+///
+/// [algo]: https://drafts.csswg.org/cssom/#serialize-an-identifier
+///
+/// Used by `CounterPass` to embed a DOM element's `id` / `class` token
+/// into a generated selector when reconstructing specificity. The element
+/// is already pinned uniquely by `[data-fulgur-cid="N"]`; the escaped
+/// identifier only has to *match* the element and *carry the right
+/// specificity*. Faithful escaping is therefore required — a mis-escaped
+/// identifier would make the generated rule silently fail to match,
+/// reintroducing the very cascade bug this reconstruction fixes.
+fn css_escape_ident(s: &str) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
+        match ch {
+            // U+0000 NULL → U+FFFD REPLACEMENT CHARACTER.
+            '\0' => out.push('\u{FFFD}'),
+            // Control characters → `\<hex> `.
+            c if ('\u{1}'..='\u{1F}').contains(&c) || c == '\u{7F}' => {
+                out.push_str(&format!("\\{:x} ", c as u32));
+            }
+            // A leading digit, or a digit right after a leading hyphen,
+            // would start a CSS number — escape it as `\<hex> `.
+            c if c.is_ascii_digit() && (i == 0 || (i == 1 && chars[0] == '-')) => {
+                out.push_str(&format!("\\{:x} ", c as u32));
+            }
+            // A bare `-` identifier would be ambiguous — escape it.
+            '-' if i == 0 && chars.len() == 1 => out.push_str("\\-"),
+            // Identifier-safe code points pass through verbatim.
+            c if c >= '\u{80}'
+                || c == '-'
+                || c == '_'
+                || c.is_ascii_digit()
+                || c.is_ascii_alphabetic() =>
+            {
+                out.push(c);
+            }
+            // Everything else is backslash-escaped literally.
+            c => {
+                out.push('\\');
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// Reconstruct a CSS selector prefix from an element's own identity —
+/// its tag name, `id`, and every `class` token.
+///
+/// `CounterPass` appends `[data-fulgur-cid="N"]::before/::after` after
+/// this prefix. The `data-fulgur-cid` attribute already pins the element
+/// uniquely, so the prefix never changes *which* element matches; it only
+/// raises the rule's specificity so a surviving author rule on the same
+/// element (the inline-`<style>` case in fulgur-da3u) loses the cascade.
+///
+/// `id` / `class` values come from arbitrary HTML attributes and are
+/// escaped with [`css_escape_ident`]. Tag names from the HTML parser are
+/// already valid identifiers; they are lowercased for good measure.
+fn element_specificity_prefix(element: Option<&blitz_dom::node::ElementData>) -> String {
+    let Some(elem) = element else {
+        return String::new();
+    };
+    let mut prefix = elem.name.local.as_ref().to_ascii_lowercase();
+    if let Some(id) = get_attr(elem, "id").filter(|s| !s.is_empty()) {
+        prefix.push('#');
+        prefix.push_str(&css_escape_ident(id));
+    }
+    if let Some(class) = get_attr(elem, "class") {
+        for token in class.split_whitespace() {
+            prefix.push('.');
+            prefix.push_str(&css_escape_ident(token));
+        }
+    }
+    prefix
 }
 
 fn resolve_string_set_values(
@@ -4204,6 +4307,103 @@ mod tests {
         assert_eq!(escape_css_url("a\nb.css"), r"a\a b.css");
         assert_eq!(escape_css_url("a\rb.css"), r"a\d b.css");
         assert_eq!(escape_css_url("a\x0cb.css"), r"a\c b.css");
+    }
+
+    #[test]
+    fn counter_pass_injected_selector_reconstructs_element_compound() {
+        use crate::gcpm::{ContentCounterMapping, ContentItem, ParsedSelector, PseudoElement};
+
+        // fulgur-da3u: when the original author rule survives in the DOM
+        // (inline `<style>`), the CounterPass-injected rule must out-specify
+        // it. The injected selector therefore reconstructs the target
+        // element's own compound — tag + id + every class — so a surviving
+        // author `#s::after` (specificity 1,0,1) loses to the injection.
+        let html = r#"<html><body><h2 id="s" class="a b">Two</h2></body></html>"#;
+        let mut doc = parse(html, 400.0, &[]);
+        let content_mappings = vec![ContentCounterMapping {
+            parsed: ParsedSelector::Id("s".into()),
+            pseudo: PseudoElement::After,
+            content: vec![ContentItem::String("[x]".into())],
+        }];
+        let pass = CounterPass::new(Vec::new(), content_mappings);
+        let ctx = PassContext { font_data: &[] };
+        pass.apply(&mut doc, &ctx);
+        let css = pass.generated_css();
+
+        assert!(
+            css.contains("h2#s.a.b[data-fulgur-cid=\"0\"]::after"),
+            "injected selector must reconstruct the element's tag+id+classes \
+             to out-specify a surviving author `#s::after` rule, got: {css}"
+        );
+    }
+
+    #[test]
+    fn counter_pass_injected_selector_for_bare_element_uses_tag() {
+        use crate::gcpm::{ContentCounterMapping, ContentItem, ParsedSelector, PseudoElement};
+
+        // An element with no id and no class: no id-based author rule can
+        // target it, so the tag prefix plus `[data-fulgur-cid]` is enough.
+        let html = r#"<html><body><div>x</div></body></html>"#;
+        let mut doc = parse(html, 400.0, &[]);
+        let content_mappings = vec![ContentCounterMapping {
+            parsed: ParsedSelector::Tag("div".into()),
+            pseudo: PseudoElement::Before,
+            content: vec![ContentItem::String("[x]".into())],
+        }];
+        let pass = CounterPass::new(Vec::new(), content_mappings);
+        let ctx = PassContext { font_data: &[] };
+        pass.apply(&mut doc, &ctx);
+        let css = pass.generated_css();
+
+        assert!(
+            css.contains("div[data-fulgur-cid=\"0\"]::before"),
+            "injected selector for a bare element must carry the tag prefix, \
+             got: {css}"
+        );
+    }
+
+    #[test]
+    fn css_escape_ident_passes_through_plain_identifiers() {
+        assert_eq!(css_escape_ident("foo"), "foo");
+        assert_eq!(css_escape_ident("section-2"), "section-2");
+        assert_eq!(css_escape_ident("_private"), "_private");
+        assert_eq!(css_escape_ident("CamelCase"), "CamelCase");
+    }
+
+    #[test]
+    fn css_escape_ident_escapes_leading_digit() {
+        // CSSOM "serialize an identifier": a leading digit is escaped as
+        // its code point in hex followed by a space.
+        assert_eq!(css_escape_ident("2col"), r"\32 col");
+        // A digit in second position is only escaped when the first
+        // code point is a hyphen.
+        assert_eq!(css_escape_ident("-2col"), r"-\32 col");
+        // A non-leading digit is left as-is.
+        assert_eq!(css_escape_ident("col2"), "col2");
+    }
+
+    #[test]
+    fn css_escape_ident_escapes_special_chars() {
+        // Punctuation that is not -, _, digit, or ASCII letter is
+        // backslash-escaped literally.
+        assert_eq!(css_escape_ident("foo:bar"), r"foo\:bar");
+        assert_eq!(css_escape_ident("a.b"), r"a\.b");
+        assert_eq!(css_escape_ident("with space"), r"with\ space");
+        // A bare leading hyphen (the whole identifier is "-") is escaped.
+        assert_eq!(css_escape_ident("-"), r"\-");
+        // A leading hyphen followed by a non-digit is fine as-is.
+        assert_eq!(css_escape_ident("-webkit"), "-webkit");
+    }
+
+    #[test]
+    fn css_escape_ident_handles_control_chars_and_null() {
+        // U+0000 NULL becomes U+FFFD REPLACEMENT CHARACTER.
+        assert_eq!(css_escape_ident("a\0b"), "a\u{FFFD}b");
+        // Control chars are escaped as hex + space.
+        assert_eq!(css_escape_ident("a\x01b"), r"a\1 b");
+        assert_eq!(css_escape_ident("a\x7fb"), r"a\7f b");
+        // Empty identifier stays empty.
+        assert_eq!(css_escape_ident(""), "");
     }
 
     #[test]

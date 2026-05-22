@@ -3710,33 +3710,25 @@ fn target_text_before_resolves_attr_pseudo() {
     );
 }
 
-/// fulgur-r73p Task 4.2 (regression): exercising the counter-tracked
-/// `collect_pseudo_text` capture path must not panic after Task 2 removed
-/// the `pseudo_text_by_node` plumbing.
+/// fulgur-r73p Task 4.2 / fulgur-da3u: a counter-bearing `::after`
+/// content list selected by an **ID selector inside an inline `<style>`**
+/// must render its resolved value to the PDF text layer.
 ///
 /// `#s::after` uses `counter(c)`, so `CounterPass` + `InjectCssPass`
 /// overlay the resolved value into the cascade; `.r::before { content:
 /// target-text(attr(href), after) }` makes `has_target_references()`
 /// true so `collect_pseudo_text` reads that counter-overlaid computed
-/// content for `#s::after` directly. The regression Task 2 must not
-/// reintroduce is a panic / `None` on that read.
+/// content for `#s::after` directly.
 ///
-/// This stays a no-panic smoke guard, NOT a text-layer assertion.
-/// fulgur-2ykw fixed the multi-item element-pseudo truncation for the
-/// normal path (AssetBundle / `<link>` CSS, and inline `<style>` with
-/// tag/class selectors), so plain `content: "[" "x" "]"` and 3-item
-/// `counter()` lists now render fully (see
-/// `pseudo_multi_item_content_renders_all_items` and
-/// `pseudo_three_item_counter_content_before_and_single_item_unchanged`).
-/// But this test uniquely combines an **inline `<style>` + ID selector**
-/// (`#s::after`): the CounterPass-injected resolved value
-/// (`[data-fulgur-cid]` specificity `0,1,0`) loses the cascade to the
-/// surviving author `#s` rule (`1,0,0`), because inline `<style>` text
-/// is not rewritten to `cleaned_css` (it cannot be — RunningElementPass
-/// and friends depend on the original inline text persisting). That
-/// separate specificity-collision root cause is tracked in fulgur-da3u;
-/// once it lands, this can become a real `[2]` text-layer assertion
-/// (fulgur-2ykw acceptance criterion #4, deferred there).
+/// This was a no-panic-only guard until fulgur-da3u: the inline
+/// `<style>` text stays in the DOM, so the author `#s::after` rule
+/// (`1,0,1`) survived and out-specified `CounterPass`'s bare
+/// `[data-fulgur-cid]::after` injection (`0,1,1`), leaving Blitz to
+/// render the `items[0]`-truncated view (just the leading `[`).
+/// fulgur-da3u reconstructs the element compound into the injected
+/// selector so the injection wins, which is exactly what makes the
+/// real `[2]` text-layer assertion below possible — it discharges
+/// fulgur-2ykw acceptance criterion #4, deferred to fulgur-da3u.
 #[test]
 fn target_text_after_resolves_counter_via_counter_pass() {
     let html = r##"<!doctype html><html><head><style>
@@ -3749,11 +3741,23 @@ fn target_text_after_resolves_counter_via_counter_pass() {
       <h2 id="s">Two</h2>
       <p>Jump to <a class="r" href="#s">section two</a> now.</p>
     </body></html>"##;
-    // collect_pseudo_text reads #s::after's counter-overlaid computed
-    // content during build_anchor_map (gated on the target-text ref
-    // above). Guard: that read must not panic and render must succeed.
     let pdf = tagged_render_with_noto(html);
     assert!(!pdf.is_empty());
+
+    let lower = decompressed_streams_lower(&pdf);
+    // `#s` is the second `h2`, so counter `c` == 2. All three items of
+    // `" [" counter(c) "]"` must render — the contiguous run `[2]` is
+    // present only when the CounterPass injection out-specifies the
+    // surviving inline-`<style>` author `#s::after` rule.
+    let needle = hex_utf16be("[2]");
+    assert!(
+        lower.contains(&needle.to_ascii_lowercase()),
+        "ActualText missing UTF-16BE for the contiguous `[2]` — the \
+         counter-resolved `#s::after` content (selected by an ID selector \
+         in an inline `<style>`) must render ALL items. Looked for \
+         {needle} in {} bytes of decompressed streams.",
+        lower.len()
+    );
 }
 
 /// fulgur-r73p Task 4.3: `target-text(url, first-letter)` must apply the
@@ -3882,6 +3886,46 @@ fn pseudo_three_item_counter_content_before_and_single_item_unchanged() {
         "ActualText missing UTF-16BE for the single-item `.` — \
          single-item pseudo content must keep rendering via Blitz's \
          native path. Looked for {single} in {} bytes.",
+        lower.len()
+    );
+}
+
+/// fulgur-da3u: a multi-item element `::before` content list selected by
+/// an **ID selector inside an inline `<style>`** must render ALL items to
+/// the PDF text layer.
+///
+/// The inline `<style>` text stays in the DOM verbatim, so the author
+/// `#s::before` rule (specificity `1,0,1`) survives the cascade. Before
+/// the fix, `CounterPass`'s injected rule used a bare
+/// `[data-fulgur-cid]::before` selector (`0,1,1`) and lost — Blitz then
+/// rendered its `items[0]`-truncated view of the surviving author rule,
+/// so only the leading `[` reached the text layer. The fix reconstructs
+/// the element's own compound (`h2#s…[data-fulgur-cid]::before`) so the
+/// injection out-specifies the author rule.
+#[test]
+fn pseudo_multi_item_content_via_inline_style_id_selector() {
+    let html = r##"<!doctype html><html><head><style>
+      body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; counter-reset: c; }
+      h2 { counter-increment: c; }
+      #s::before { content: "[" counter(c) "]"; }
+    </style></head><body>
+      <h2>One</h2>
+      <h2 id="s">Two</h2>
+    </body></html>"##;
+    let pdf = tagged_render_with_noto(html);
+    assert!(!pdf.is_empty());
+
+    let lower = decompressed_streams_lower(&pdf);
+    // `#s` is the second `h2`, so counter `c` == 2. All three items must
+    // render contiguously as `[2]`, not the truncated leading `[`.
+    let needle = hex_utf16be("[2]");
+    assert!(
+        lower.contains(&needle.to_ascii_lowercase()),
+        "ActualText missing UTF-16BE for the contiguous `[2]` — a \
+         multi-item `::before` content list selected by an ID selector in \
+         an inline `<style>` must render ALL items. The CounterPass \
+         injected rule must out-specify the surviving author `#s::before` \
+         rule. Looked for {needle} in {} bytes of decompressed streams.",
         lower.len()
     );
 }
