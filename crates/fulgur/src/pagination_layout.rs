@@ -899,9 +899,109 @@ impl<'a> PaginationLayoutTree<'a> {
             // every Block / Image / Paragraph and reverts to v2
             // drawing at x=0 without this. Matches the descendant
             // fragment shape on the line below.
+            let frag_x = body_x + layout.location.x;
+
+            // fulgur-sbw2: a child whose CSS-resolved height alone
+            // exceeds `page_height_px` (e.g. `<div height:300vh>`)
+            // must be sliced across pages. The recursion gate above
+            // returns false for this shape because the child's *own*
+            // children fit the strip (the gate measures descendant
+            // overflow, not the parent's intrinsic height), so we
+            // would otherwise emit a single oversized fragment on the
+            // current page and stop. Emit one fragment per page strip
+            // with page-local y — `PaginationGeometry::is_split()`
+            // flips to `true` automatically once `fragments.len() > 1`,
+            // and render.rs picks the per-slice height accordingly.
+            // Descendants are recorded against the *first* slice only;
+            // exact mid-element pagination of nested content is still
+            // future work (see `record_subtree_descendants` notes).
+            //
+            // Tolerance: Stylo / Taffy round CSS-resolved `<length>`
+            // values to integer CSS pixels in some cases — a 220pt
+            // spacer (= 293.333… px) is reported back as `child_h =
+            // 294` while `page_height_px` is computed without that
+            // round-trip (= 293.33334). The literal `>` then trips
+            // by ~0.67 px and the spacer is wrongly sliced into two
+            // pages (gcpm_snapshot tests regress: spacer + page-break
+            // pair becomes 2 + 1 instead of 1 + 1 per section). One
+            // CSS pixel of slack absorbs the quantization without
+            // letting truly oversized content (`300vh ≈ 880 px on a
+            // 293-px strip`) slip through.
+            //
+            // Atomic children opt out: a transformed subtree paints
+            // as a single atomic box (CSS Transforms §6.1) — it must
+            // never split across pages because the rotation /
+            // skew / matrix is applied to a single shape, not
+            // per-slice. `contain: size` is NOT excluded: a
+            // `<div contain:size height:350vh>` still spans four
+            // pages visually (WPT `monolithic-overflow-022-print`),
+            // it's only the descendant content that's atomic.
+            let has_transform = child
+                .primary_styles()
+                .is_some_and(|s| !s.get_box().transform.0.is_empty());
+            if !has_transform && child_h > self.page_height_px + 1.0 {
+                let first_slice_h = (self.page_height_px - cursor_y).min(child_h);
+                self.geometry
+                    .entry(child_id)
+                    .or_default()
+                    .fragments
+                    .push(Fragment {
+                        page_index,
+                        x: frag_x,
+                        y: cursor_y,
+                        width: child_w,
+                        height: first_slice_h,
+                    });
+                record_subtree_descendants(
+                    &mut self.geometry,
+                    self.doc,
+                    child_id,
+                    page_index,
+                    cursor_y,
+                    frag_x,
+                    0,
+                );
+                let mut remaining = child_h - first_slice_h;
+                let mut last_slice_h = first_slice_h;
+                while remaining > 0.0 {
+                    page_index += 1;
+                    last_slice_h = remaining.min(self.page_height_px);
+                    self.geometry
+                        .entry(child_id)
+                        .or_default()
+                        .fragments
+                        .push(Fragment {
+                            page_index,
+                            x: frag_x,
+                            y: 0.0,
+                            width: child_w,
+                            height: last_slice_h,
+                        });
+                    remaining -= last_slice_h;
+                }
+                cursor_y = if child_h - first_slice_h > 0.0 {
+                    last_slice_h
+                } else {
+                    cursor_y + first_slice_h
+                };
+                emitted += 1;
+                prev_bottom_y_in_body = this_top_in_body + child_h;
+                if !is_float {
+                    prev_used_page = Some(used_end.clone());
+                }
+                if matches!(
+                    break_props.break_after,
+                    Some(crate::draw_primitives::BreakAfter::Page)
+                ) {
+                    page_index += 1;
+                    cursor_y = 0.0;
+                }
+                continue;
+            }
+
             let frag = Fragment {
                 page_index,
-                x: body_x + layout.location.x,
+                x: frag_x,
                 y: cursor_y,
                 width: child_w,
                 height: child_h,
@@ -932,7 +1032,7 @@ impl<'a> PaginationLayoutTree<'a> {
                 child_id,
                 page_index,
                 cursor_y,
-                body_x + layout.location.x,
+                frag_x,
                 0,
             );
 
