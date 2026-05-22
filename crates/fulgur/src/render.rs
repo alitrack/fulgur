@@ -5199,4 +5199,158 @@ mod tests {
         let (_, clip, _) = build_page_skip_sets(&d);
         assert!(clip.is_empty(), "empty clip_descendants → nothing added");
     }
+
+    // --- build_multicol_stroke ---
+
+    fn make_rule(
+        width: f32,
+        style: crate::column_css::ColumnRuleStyle,
+    ) -> crate::column_css::ColumnRuleSpec {
+        crate::column_css::ColumnRuleSpec {
+            width,
+            style,
+            color: [0, 0, 0, 255],
+        }
+    }
+
+    #[test]
+    fn build_multicol_stroke_zero_width_returns_none() {
+        let rule = make_rule(0.0, crate::column_css::ColumnRuleStyle::Solid);
+        assert!(
+            build_multicol_stroke(&rule).is_none(),
+            "width=0 must return None"
+        );
+    }
+
+    #[test]
+    fn build_multicol_stroke_negative_width_returns_none() {
+        let rule = make_rule(-1.0, crate::column_css::ColumnRuleStyle::Solid);
+        assert!(
+            build_multicol_stroke(&rule).is_none(),
+            "negative width must return None"
+        );
+    }
+
+    #[test]
+    fn build_multicol_stroke_style_none_returns_none() {
+        let rule = make_rule(2.0, crate::column_css::ColumnRuleStyle::None);
+        assert!(
+            build_multicol_stroke(&rule).is_none(),
+            "style=None must return None"
+        );
+    }
+
+    #[test]
+    fn build_multicol_stroke_solid_returns_some_without_dash() {
+        let rule = make_rule(2.0, crate::column_css::ColumnRuleStyle::Solid);
+        let stroke =
+            build_multicol_stroke(&rule).expect("solid with positive width should return Some");
+        assert!(
+            stroke.dash.is_none(),
+            "solid rule must have no dash pattern"
+        );
+        assert!(
+            (stroke.width - 2.0).abs() < 0.001,
+            "stroke width should match rule width"
+        );
+    }
+
+    #[test]
+    fn build_multicol_stroke_dashed_returns_some_with_dash_array() {
+        let w = 3.0_f32;
+        let rule = make_rule(w, crate::column_css::ColumnRuleStyle::Dashed);
+        let stroke = build_multicol_stroke(&rule).expect("dashed rule should return Some");
+        let dash = stroke
+            .dash
+            .as_ref()
+            .expect("dashed rule must carry a dash pattern");
+        assert_eq!(
+            dash.array,
+            vec![w * 3.0, w * 2.0],
+            "dashed dash array: [3w, 2w]"
+        );
+        assert!((dash.offset - 0.0).abs() < 0.001, "dash offset must be 0");
+    }
+
+    #[test]
+    fn build_multicol_stroke_dotted_returns_some_with_round_cap_and_gap() {
+        let w = 1.5_f32;
+        let rule = make_rule(w, crate::column_css::ColumnRuleStyle::Dotted);
+        let stroke = build_multicol_stroke(&rule).expect("dotted rule should return Some");
+        assert_eq!(
+            stroke.line_cap,
+            krilla::paint::LineCap::Round,
+            "dotted rule must use round line cap"
+        );
+        let dash = stroke
+            .dash
+            .as_ref()
+            .expect("dotted rule must carry a dash pattern");
+        assert_eq!(
+            dash.array,
+            vec![0.0, w * 2.0],
+            "dotted dash array: [0, 2w] produces round dots"
+        );
+    }
+
+    // --- decode_image_for_v2 ---
+
+    // Minimal 1×1 red PNG, identical to the one in convert/replaced.rs tests.
+    const RENDER_TEST_PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    fn make_image_entry_raw(
+        data: &[u8],
+        format: crate::image::ImageFormat,
+    ) -> crate::drawables::ImageEntry {
+        crate::drawables::ImageEntry {
+            image_data: Arc::new(data.to_vec()),
+            format,
+            width: 1.0,
+            height: 1.0,
+            opacity: 1.0,
+            visible: true,
+        }
+    }
+
+    #[test]
+    fn decode_image_for_v2_valid_png_returns_some() {
+        let entry = make_image_entry_raw(RENDER_TEST_PNG_1X1, crate::image::ImageFormat::Png);
+        assert!(
+            decode_image_for_v2(&entry).is_some(),
+            "valid PNG should decode successfully"
+        );
+    }
+
+    #[test]
+    fn decode_image_for_v2_empty_png_bytes_returns_none() {
+        let entry = make_image_entry_raw(&[], crate::image::ImageFormat::Png);
+        assert!(
+            decode_image_for_v2(&entry).is_none(),
+            "empty PNG bytes must yield None"
+        );
+    }
+
+    #[test]
+    fn decode_image_for_v2_empty_jpeg_bytes_returns_none() {
+        let entry = make_image_entry_raw(&[], crate::image::ImageFormat::Jpeg);
+        assert!(
+            decode_image_for_v2(&entry).is_none(),
+            "empty JPEG bytes must yield None"
+        );
+    }
+
+    #[test]
+    fn decode_image_for_v2_empty_gif_bytes_returns_none() {
+        let entry = make_image_entry_raw(&[], crate::image::ImageFormat::Gif);
+        assert!(
+            decode_image_for_v2(&entry).is_none(),
+            "empty GIF bytes must yield None"
+        );
+    }
 }
