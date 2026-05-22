@@ -131,7 +131,7 @@ callers don't get this guarantee by default — see the tracking issue
   Bash-driven `git worktree add` (used by the `using-git-worktrees` skill)
   doesn't trigger that hook.
 - Use `BTreeMap` (not `HashMap`) for iteration that affects PDF output (determinism)
-- Blitz: `!important` unreliable, `padding-top` on inline roots ignored (use `margin-top`)
+- Blitz: `!important` reliability **unverified** (this note shares commit `7983fab5` with the since-disproven "Blitz not thread-safe" gotcha; no test/issue backing — measure before relying on or avoiding it), `padding-top` on inline roots ignored (use `margin-top`)
 - `cargo fmt --check` enforced by CI
 - **Coverage scope**: CI の coverage job は `cargo llvm-cov nextest --workspace --exclude fulgur-vrt`
   で動いている (`.github/workflows/ci.yml`)。`crates/fulgur-vrt` は別ジョブで実行されるため、
