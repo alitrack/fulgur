@@ -1786,11 +1786,26 @@ impl CounterPass {
                 }
             }
 
-            Some((matched_ops, matched_content_indices))
+            // Reconstruct the element's own compound (`tag#id.class`) so
+            // an injected `::before` / `::after` rule out-specifies any
+            // author rule that survives in the DOM and targets the same
+            // element — the inline-`<style>` cascade collision fixed in
+            // fulgur-da3u. `[data-fulgur-cid]` already pins the element
+            // uniquely; this prefix only raises specificity. Computed
+            // here, inside the Phase 1 immutable borrow, to reuse `elem`
+            // instead of re-fetching the node later. Empty when no
+            // content mapping matched (no rule will be injected).
+            let specificity_prefix = if matched_content_indices.is_empty() {
+                String::new()
+            } else {
+                element_specificity_prefix(Some(elem))
+            };
+
+            Some((matched_ops, matched_content_indices, specificity_prefix))
         };
         // immutable borrow of doc is now dropped
 
-        let Some((matched_ops, matched_content_indices)) = phase1 else {
+        let Some((matched_ops, matched_content_indices, specificity_prefix)) = phase1 else {
             return;
         };
 
@@ -1864,26 +1879,8 @@ impl CounterPass {
             None
         };
 
-        // Reconstruct the element's own compound (`tag#id.class`) so the
-        // injected rule out-specifies any author rule that survives in
-        // the DOM and targets the same element — the inline-`<style>`
-        // cascade collision fixed in fulgur-da3u. `[data-fulgur-cid]`
-        // already pins the element uniquely; this prefix only raises
-        // specificity. Computed once: the element's identity does not
-        // change during child traversal, so `::before` and `::after`
-        // share it.
-        //
-        // Order matters: this runs *after* the `attr_value` block set the
-        // `data-fulgur-cid` attribute. That is safe because
-        // `element_specificity_prefix` reads only `id` / `class` — never
-        // `data-fulgur-cid` — so the just-injected attribute does not
-        // leak into the prefix. A future change that widens the prefix to
-        // arbitrary attributes would have to move this above that block.
-        let specificity_prefix = if attr_value.is_some() {
-            element_specificity_prefix(doc.get_node(node_id).and_then(|n| n.element_data()))
-        } else {
-            String::new()
-        };
+        // `specificity_prefix` was computed in Phase 1 (above) — reused
+        // verbatim for both `::before` and `::after`.
 
         // Resolve ::before now (before child traversal)
         if let Some(ref cid) = attr_value {
@@ -2340,9 +2337,14 @@ fn css_escape_string(s: &str) -> String {
 /// identifier would make the generated rule silently fail to match,
 /// reintroducing the very cascade bug this reconstruction fixes.
 fn css_escape_ident(s: &str) -> String {
-    let mut out = String::new();
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &ch) in chars.iter().enumerate() {
+    // Single pass over the `char`s — no `Vec<char>` buffer. `index` and
+    // `prev` carry the position-dependent state the CSSOM algorithm
+    // needs; `peek()` covers the bare-`-` look-ahead.
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    let mut index = 0usize;
+    let mut prev: Option<char> = None;
+    while let Some(ch) = chars.next() {
         match ch {
             // U+0000 NULL → U+FFFD REPLACEMENT CHARACTER.
             '\0' => out.push('\u{FFFD}'),
@@ -2352,11 +2354,11 @@ fn css_escape_ident(s: &str) -> String {
             }
             // A leading digit, or a digit right after a leading hyphen,
             // would start a CSS number — escape it as `\<hex> `.
-            c if c.is_ascii_digit() && (i == 0 || (i == 1 && chars[0] == '-')) => {
+            c if c.is_ascii_digit() && (index == 0 || (index == 1 && prev == Some('-'))) => {
                 out.push_str(&format!("\\{:x} ", c as u32));
             }
             // A bare `-` identifier would be ambiguous — escape it.
-            '-' if i == 0 && chars.len() == 1 => out.push_str("\\-"),
+            '-' if index == 0 && chars.peek().is_none() => out.push_str("\\-"),
             // Identifier-safe code points pass through verbatim.
             c if c >= '\u{80}'
                 || c == '-'
@@ -2372,6 +2374,8 @@ fn css_escape_ident(s: &str) -> String {
                 out.push(c);
             }
         }
+        prev = Some(ch);
+        index += 1;
     }
     out
 }

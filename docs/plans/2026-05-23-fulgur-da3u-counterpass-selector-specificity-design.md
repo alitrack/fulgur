@@ -68,8 +68,8 @@ inline-`<style>` の経路は設計上非対称（DOM presence・パス順序が
 - `h2#s[data-fulgur-cid="N"]::after` = `(1,1,2)` は author `#s::after`
   `(1,0,1)` に勝つ。
 - 全クラスを盛り込むことで `.a.b.c::after` `(0,3,1)` のような
-  クラス多用ルールも被覆する。根本原因が挙げる「specificity が
-  `(0,1,0)` 以上の任意の author セレクタ」全般をカバーする。
+  クラス多用ルールも被覆する。要素を直接対象とする単一 compound の
+  author ルールは（後述の「既知の限界」を除き）被覆できる。
 - specificity が同点の場合は source order で決まる。`InjectCssPass`
   が生成する `<style>` ノードは DOM パース後に作られ最大の node_id を
   持つため、`add_stylesheet_for_node` のオーダリング（node_id 昇順）で
