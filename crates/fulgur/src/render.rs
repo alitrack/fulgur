@@ -5200,3 +5200,126 @@ mod tests {
         assert!(clip.is_empty(), "empty clip_descendants → nothing added");
     }
 }
+
+/// Smoke tests that drive the rendering pipeline end-to-end.
+///
+/// These cover `draw_v2_page`, `draw_block_v2`, `draw_paragraph_v2`,
+/// `draw_list_item_with_block`, `draw_table_v2`, `draw_svg_v2`,
+/// `draw_under_transform`, `draw_under_clip`, `draw_under_opacity`,
+/// `paint_multicol_paragraph_slices`, and related tagged-render paths
+/// that cannot be reached from pure-data unit tests.
+///
+/// Each test asserts `!pdf.is_empty()` — the goal is to catch panics
+/// and ensure coverage attribution fires for each render arm.
+#[cfg(test)]
+mod smoke_tests {
+    fn render(html: &str) -> Vec<u8> {
+        crate::engine::Engine::builder()
+            .build()
+            .render_html(html)
+            .expect("smoke render")
+    }
+
+    fn render_tagged(html: &str) -> Vec<u8> {
+        crate::engine::Engine::builder()
+            .tagged(true)
+            .build()
+            .render_html(html)
+            .expect("smoke render (tagged)")
+    }
+
+    #[test]
+    fn smoke_basic_paragraph() {
+        assert!(!render("<p>Hello, world!</p>").is_empty());
+    }
+
+    #[test]
+    fn smoke_nested_blocks() {
+        assert!(!render("<div><p>outer</p><div><p>inner</p></div></div>").is_empty());
+    }
+
+    #[test]
+    fn smoke_unordered_list() {
+        assert!(!render("<ul><li>apple</li><li>banana</li></ul>").is_empty());
+    }
+
+    #[test]
+    fn smoke_ordered_list() {
+        assert!(!render("<ol><li>first</li><li>second</li></ol>").is_empty());
+    }
+
+    #[test]
+    fn smoke_table() {
+        assert!(
+            !render(
+                "<table><thead><tr><th>H1</th><th>H2</th></tr></thead>\
+             <tbody><tr><td>A</td><td>B</td></tr></tbody></table>"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn smoke_inline_svg() {
+        assert!(
+            !render(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+                <circle cx="20" cy="20" r="15"/>
+            </svg>"#
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn smoke_css_transform() {
+        assert!(
+            !render(r#"<div style="transform: translateX(10px)">shifted text</div>"#).is_empty()
+        );
+    }
+
+    #[test]
+    fn smoke_overflow_clip() {
+        assert!(
+            !render(
+                r#"<div style="overflow: clip; width: 100px; height: 40px">clipped content</div>"#
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn smoke_opacity_wrapper() {
+        assert!(!render(r#"<div style="opacity: 0.5"><p>faded</p></div>"#).is_empty());
+    }
+
+    #[test]
+    fn smoke_multicolumn() {
+        assert!(
+            !render(r#"<div style="column-count: 2">alpha beta gamma delta epsilon zeta</div>"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn smoke_multicolumn_with_rule() {
+        assert!(
+            !render(
+                r#"<div style="column-count: 2; column-rule: 2px solid black">
+                alpha beta gamma delta
+            </div>"#
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn smoke_tagged_heading() {
+        assert!(!render_tagged("<h1>Title</h1><p>Body text.</p>").is_empty());
+    }
+
+    #[test]
+    fn smoke_tagged_list() {
+        assert!(!render_tagged("<ul><li>Item A</li><li>Item B</li></ul>").is_empty());
+    }
+}
