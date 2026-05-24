@@ -5199,4 +5199,155 @@ mod tests {
         let (_, clip, _) = build_page_skip_sets(&d);
         assert!(clip.is_empty(), "empty clip_descendants → nothing added");
     }
+
+    // --- build_multicol_stroke ---
+
+    fn make_rule(
+        width: f32,
+        style: crate::column_css::ColumnRuleStyle,
+    ) -> crate::column_css::ColumnRuleSpec {
+        crate::column_css::ColumnRuleSpec {
+            width,
+            style,
+            color: [0, 0, 0, 255],
+        }
+    }
+
+    #[test]
+    fn build_multicol_stroke_none_style_returns_none() {
+        let rule = make_rule(2.0, crate::column_css::ColumnRuleStyle::None);
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_zero_width_returns_none() {
+        let rule = make_rule(0.0, crate::column_css::ColumnRuleStyle::Solid);
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_negative_width_returns_none() {
+        let rule = make_rule(-1.0, crate::column_css::ColumnRuleStyle::Solid);
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_solid_returns_some_without_dash() {
+        let rule = make_rule(2.0, crate::column_css::ColumnRuleStyle::Solid);
+        let stroke =
+            build_multicol_stroke(&rule).expect("Solid with positive width should be Some");
+        assert!(
+            stroke.dash.is_none(),
+            "Solid style must have no dash pattern"
+        );
+        assert!(
+            (stroke.width - 2.0).abs() < 0.001,
+            "width should equal rule.width"
+        );
+    }
+
+    #[test]
+    fn build_multicol_stroke_dashed_returns_some_with_dash_array() {
+        let rule = make_rule(3.0, crate::column_css::ColumnRuleStyle::Dashed);
+        let stroke =
+            build_multicol_stroke(&rule).expect("Dashed with positive width should be Some");
+        let dash = stroke
+            .dash
+            .expect("Dashed style must produce a dash pattern");
+        // array = [w*3, w*2] = [9.0, 6.0]
+        assert_eq!(dash.array.len(), 2);
+        assert!((dash.array[0] - 9.0).abs() < 0.001, "on-dash = width*3");
+        assert!((dash.array[1] - 6.0).abs() < 0.001, "gap = width*2");
+    }
+
+    #[test]
+    fn build_multicol_stroke_dotted_returns_some_with_round_cap_and_dash() {
+        let rule = make_rule(2.0, crate::column_css::ColumnRuleStyle::Dotted);
+        let stroke =
+            build_multicol_stroke(&rule).expect("Dotted with positive width should be Some");
+        assert_eq!(
+            stroke.line_cap,
+            krilla::paint::LineCap::Round,
+            "Dotted style must use Round line cap"
+        );
+        let dash = stroke
+            .dash
+            .expect("Dotted style must produce a dash pattern");
+        // array = [0.0, w*2] = [0.0, 4.0]
+        assert_eq!(dash.array.len(), 2);
+        assert!((dash.array[0] - 0.0).abs() < 0.001, "dot-length = 0");
+        assert!((dash.array[1] - 4.0).abs() < 0.001, "gap = width*2");
+    }
+
+    // --- decode_image_for_v2 ---
+
+    // Minimal 1×1 red PNG used by decode tests.
+    const DECODE_TEST_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    fn make_decode_entry(
+        data: &[u8],
+        format: crate::image::ImageFormat,
+    ) -> crate::drawables::ImageEntry {
+        crate::drawables::ImageEntry {
+            image_data: Arc::new(data.to_vec()),
+            format,
+            width: 1.0,
+            height: 1.0,
+            opacity: 1.0,
+            visible: true,
+        }
+    }
+
+    #[test]
+    fn decode_image_for_v2_valid_png_returns_some() {
+        let entry = make_decode_entry(DECODE_TEST_PNG, crate::image::ImageFormat::Png);
+        assert!(
+            decode_image_for_v2(&entry).is_some(),
+            "valid PNG bytes should decode to Some"
+        );
+    }
+
+    #[test]
+    fn decode_image_for_v2_empty_bytes_returns_none() {
+        let entry = make_decode_entry(&[], crate::image::ImageFormat::Png);
+        assert!(
+            decode_image_for_v2(&entry).is_none(),
+            "empty bytes should decode to None"
+        );
+    }
+
+    #[test]
+    fn decode_image_for_v2_garbage_bytes_returns_none() {
+        let entry = make_decode_entry(&[0xDE, 0xAD, 0xBE, 0xEF], crate::image::ImageFormat::Png);
+        assert!(
+            decode_image_for_v2(&entry).is_none(),
+            "garbage bytes should decode to None"
+        );
+    }
+
+    #[test]
+    fn decode_image_for_v2_jpeg_format_flag_with_png_bytes_returns_none() {
+        // PNG bytes presented as JPEG → krilla's JPEG parser rejects them.
+        let entry = make_decode_entry(DECODE_TEST_PNG, crate::image::ImageFormat::Jpeg);
+        assert!(
+            decode_image_for_v2(&entry).is_none(),
+            "PNG bytes with Jpeg format tag should fail JPEG parsing"
+        );
+    }
+
+    #[test]
+    fn decode_image_for_v2_gif_format_with_garbage_returns_none() {
+        // Exercises the Gif arm of the match — garbage bytes always fail.
+        let entry = make_decode_entry(&[0x47, 0x49, 0x46], crate::image::ImageFormat::Gif);
+        assert!(
+            decode_image_for_v2(&entry).is_none(),
+            "invalid GIF bytes should decode to None"
+        );
+    }
 }
