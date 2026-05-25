@@ -52,16 +52,28 @@ fn tagged_render_with_noto(html: &str) -> Vec<u8> {
         .expect("tagged render")
 }
 
-/// Encode `s` as upper-case UTF-16BE hex, the form Krilla writes into
-/// `/Span << /ActualText <FEFF…> >>` markers in tagged PDFs. Tests use
-/// this to grep ActualText payloads instead of decoding CID-encoded TJ
-/// strings (lopdf 0.40 lacks ToUnicode CMap parsing).
-fn hex_utf16be(s: &str) -> String {
-    let mut out = String::new();
-    for c in s.encode_utf16() {
-        out.push_str(&format!("{:04X}", c));
-    }
-    out
+/// Extract text from a PDF via `pdftotext -raw`. `-raw` flattens tagged
+/// PDFs to reading-order content stream text and avoids the column wrap
+/// pdftotext applies in default mode, which would split sentinels like
+/// `[APP: ]` across line breaks. Returns `None` if `pdftotext` is not
+/// installed — callers should gracefully skip in that case (CI has
+/// poppler-utils preinstalled; local dev on macOS needs `brew install
+/// poppler`). pdftotext walks the font's ToUnicode CMap to recover
+/// Unicode from CID-encoded TJ strings, which lopdf 0.40 cannot do —
+/// this is the replacement for the old ActualText hex grep, which was
+/// only viable while the now-fixed `text_range = 0..text_len` bug
+/// triggered Krilla's whole-paragraph ActualText path.
+fn extract_pdf_text(pdf: &[u8]) -> Option<String> {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("extract.pdf");
+    std::fs::write(&path, pdf).expect("write pdf");
+    let output = std::process::Command::new("pdftotext")
+        .arg("-raw")
+        .arg(&path)
+        .arg("-")
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 #[test]
@@ -3415,41 +3427,20 @@ fn target_counter_in_toc_renders_page_number() {
         .expect("render");
     assert!(!pdf.is_empty());
 
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("toc.pdf");
-    std::fs::write(&path, &pdf).expect("write pdf");
-
-    // Walk every content stream, decompress, and concatenate the
-    // resulting bytes so we can grep for ActualText payloads regardless
-    // of which page they live on.
-    let doc = lopdf::Document::load(&path).expect("load pdf");
-    let mut decompressed = String::new();
-    for (_id, obj) in doc.objects.iter() {
-        if let lopdf::Object::Stream(s) = obj {
-            let mut clone = s.clone();
-            let _ = clone.decompress();
-            decompressed.push_str(&String::from_utf8_lossy(&clone.content));
-        }
-    }
-
-    // UTF-16BE hex for "(p.2)" → 0028 0070 002E 0032 0029
-    // UTF-16BE hex for "(p.3)" → 0028 0070 002E 0033 0029
-    // ActualText payloads are upper-case hex so search both cases for
-    // robustness against Krilla version drift.
-    let p2 = hex_utf16be("(p.2)");
-    let p3 = hex_utf16be("(p.3)");
-    let lower = decompressed.to_ascii_lowercase();
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
     assert!(
-        lower.contains(&p2.to_ascii_lowercase()),
-        "ActualText does not contain UTF-16BE for (p.2) — orchestration likely failed (pass 2 not firing). \
-         Looked for {p2} in {} bytes of decompressed PDF streams.",
-        lower.len()
+        text.contains("(p.2)"),
+        "extracted PDF text missing `(p.2)` — pass 2 likely did not fire \
+         and target-counter was not resolved to the actual page number. \
+         Got: {text:?}"
     );
     assert!(
-        lower.contains(&p3.to_ascii_lowercase()),
-        "ActualText does not contain UTF-16BE for (p.3) — orchestration likely failed. \
-         Looked for {p3} in {} bytes of decompressed PDF streams.",
-        lower.len()
+        text.contains("(p.3)"),
+        "extracted PDF text missing `(p.3)` — pass 2 likely did not fire. \
+         Got: {text:?}"
     );
 }
 
@@ -3520,33 +3511,19 @@ fn target_counter_in_link_loaded_css_triggers_pass_two() {
         .expect("render");
     assert!(!pdf.is_empty());
 
-    let pdf_path = dir.path().join("toc.pdf");
-    std::fs::write(&pdf_path, &pdf).expect("write pdf");
-
-    let doc = lopdf::Document::load(&pdf_path).expect("load pdf");
-    let mut decompressed = String::new();
-    for (_id, obj) in doc.objects.iter() {
-        if let lopdf::Object::Stream(s) = obj {
-            let mut clone = s.clone();
-            let _ = clone.decompress();
-            decompressed.push_str(&String::from_utf8_lossy(&clone.content));
-        }
-    }
-
-    let p2 = hex_utf16be("(p.2)");
-    let p3 = hex_utf16be("(p.3)");
-    let lower = decompressed.to_ascii_lowercase();
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
     assert!(
-        lower.contains(&p2.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for (p.2) — pass 2 did not fire for <link>-loaded \
-         target-counter CSS. Looked for {p2} in {} bytes of decompressed PDF streams.",
-        lower.len()
+        text.contains("(p.2)"),
+        "extracted PDF text missing `(p.2)` — pass 2 did not fire for \
+         <link>-loaded target-counter CSS. Got: {text:?}"
     );
     assert!(
-        lower.contains(&p3.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for (p.3) — pass 2 did not fire for <link>-loaded \
-         target-counter CSS. Looked for {p3} in {} bytes of decompressed PDF streams.",
-        lower.len()
+        text.contains("(p.3)"),
+        "extracted PDF text missing `(p.3)` — pass 2 did not fire for \
+         <link>-loaded target-counter CSS. Got: {text:?}"
     );
 }
 
@@ -3576,29 +3553,19 @@ fn target_text_in_top_center_resolves_via_implicit_href() {
     let pdf = tagged_render_with_noto(html);
     assert!(!pdf.is_empty());
 
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("margin-box-target-text.pdf");
-    std::fs::write(&path, &pdf).expect("write pdf");
-
-    let doc = lopdf::Document::load(&path).expect("load pdf");
-    let mut decompressed = String::new();
-    for (_id, obj) in doc.objects.iter() {
-        if let lopdf::Object::Stream(s) = obj {
-            let mut clone = s.clone();
-            let _ = clone.decompress();
-            decompressed.push_str(&String::from_utf8_lossy(&clone.content));
-        }
-    }
-    let lower = decompressed.to_ascii_lowercase();
-
-    let combined = hex_utf16be("Header: My Section Title");
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
+    // The literal `Header: ` prefix is unique to the margin-box payload
+    // (the body's `<h2>` contains only the bare title), so this contiguous
+    // match proves the margin box rendered the resolved `target-text` —
+    // not just that `My Section Title` exists somewhere on the page.
     assert!(
-        lower.contains(&combined.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for the @top-center payload — \
+        text.contains("Header: My Section Title"),
+        "extracted PDF text missing `Header: My Section Title` — \
          margin-box `target-text(attr(href))` did not pick up the implicit \
-         href from `<a href=\"#sec1\">`. Looked for {combined} in {} bytes \
-         of decompressed PDF streams.",
-        lower.len()
+         href from `<a href=\"#sec1\">`. Got: {text:?}"
     );
 }
 
@@ -3647,29 +3614,6 @@ fn target_text_second_arg_resolves_target_fragments() {
     );
 }
 
-/// Concatenate every decompressed content/object stream of `pdf` so a
-/// test can grep for the UTF-16BE `/ActualText` payloads Krilla writes
-/// into tagged-PDF `/Span` markers (mirrors the technique in
-/// `target_counter_in_link_loaded_css_triggers_pass_two` and
-/// `target_text_in_top_center_resolves_via_implicit_href`). lopdf 0.40
-/// cannot decode the CID-encoded `TJ` strings, so ActualText is the
-/// portable signal that resolved generated content reached pass 2.
-fn decompressed_streams_lower(pdf: &[u8]) -> String {
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("grep.pdf");
-    std::fs::write(&path, pdf).expect("write pdf");
-    let doc = lopdf::Document::load(&path).expect("load pdf");
-    let mut decompressed = String::new();
-    for (_id, obj) in doc.objects.iter() {
-        if let lopdf::Object::Stream(s) = obj {
-            let mut clone = s.clone();
-            let _ = clone.decompress();
-            decompressed.push_str(&String::from_utf8_lossy(&clone.content));
-        }
-    }
-    decompressed.to_ascii_lowercase()
-}
-
 /// fulgur-r73p Task 4.1: `target-text(attr(href), before)` must reflect a
 /// target element's *cascade-only* `::before` content. `#sec::before`
 /// here uses `attr(data-tag)` + a literal string — content with no
@@ -3692,21 +3636,22 @@ fn target_text_before_resolves_attr_pseudo() {
     let pdf = tagged_render_with_noto(html);
     assert!(!pdf.is_empty());
 
-    let lower = decompressed_streams_lower(&pdf);
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
     // Sentinel-wrapped: the trailing `]` immediately follows the captured
     // text, so a hit proves the trailing separator space of `APP: ` is part
     // of the captured pseudo content — not borrowed from following page
     // text. A trim-everything normalization would yield `[APP:]` and fail.
-    let needle = hex_utf16be("[APP: ]");
     assert!(
-        lower.contains(&needle.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for `[APP: ]` — collect_pseudo_text did \
-         not capture the cascade-only attr() `::before` of #sec (with its \
-         trailing separator space) into the AnchorMap, so `.ref::after {{ \
-         content: \"[\" target-text(attr(href), before) \"]\" }}` rendered \
-         the wrong text. Looked for {needle} in {} bytes of decompressed \
-         streams.",
-        lower.len()
+        text.contains("[APP: ]"),
+        "extracted PDF text missing contiguous `[APP: ]` — \
+         collect_pseudo_text did not capture the cascade-only attr() \
+         `::before` of #sec (with its trailing separator space) into the \
+         AnchorMap, so `.ref::after {{ content: \"[\" \
+         target-text(attr(href), before) \"]\" }}` rendered the wrong \
+         text. Got: {text:?}"
     );
 }
 
@@ -3744,54 +3689,88 @@ fn target_text_after_resolves_counter_via_counter_pass() {
     let pdf = tagged_render_with_noto(html);
     assert!(!pdf.is_empty());
 
-    let lower = decompressed_streams_lower(&pdf);
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
     // `#s` is the second `h2`, so counter `c` == 2. All three items of
     // `" [" counter(c) "]"` must render — the contiguous run `[2]` is
     // present only when the CounterPass injection out-specifies the
     // surviving inline-`<style>` author `#s::after` rule.
-    let needle = hex_utf16be("[2]");
     assert!(
-        lower.contains(&needle.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for the contiguous `[2]` — the \
+        text.contains("[2]"),
+        "extracted PDF text missing contiguous `[2]` — the \
          counter-resolved `#s::after` content (selected by an ID selector \
-         in an inline `<style>`) must render ALL items. Looked for \
-         {needle} in {} bytes of decompressed streams.",
-        lower.len()
+         in an inline `<style>`) must render ALL items. Got: {text:?}"
     );
 }
 
 /// fulgur-r73p Task 4.3: `target-text(url, first-letter)` must apply the
-/// CSS Pseudo-Elements 4 §3.2 algorithm from Task 3 — leading
-/// typographic punctuation (`「`) is included with the first letter, so
-/// the result is `「H`, not `「` or `H`.
+/// CSS Pseudo-Elements 4 §3.2 algorithm — leading typographic
+/// punctuation is included with the first letter, so the result is
+/// `「H`, not `「` or `H`.
+///
+/// `「` (U+300C) is not in `NotoSans-Regular.ttf`, so this test layers
+/// in `NotoSansJP-Regular.otf` (also bundled under `examples/.fonts/`)
+/// to give the CJK punctuation a glyph with a real ToUnicode CMap
+/// entry — pdftotext can then recover the rendered text. Without the
+/// JP font Stylo would fall back to a system font whose CID 0 lands in
+/// the PDF unmapped and no extractor can recover it. The pure
+/// `compute_first_letter` algorithm (including its CJK punctuation
+/// handling) is covered by unit tests in
+/// `crates/fulgur/src/gcpm/target_ref.rs` — this test exercises the
+/// end-to-end render plumbing.
 #[test]
 fn target_text_first_letter_typographic() {
     let html = r##"<!doctype html><html><head><style>
-      body { font-family: 'Noto Sans', sans-serif; font-size: 12pt; }
+      body { font-family: 'Noto Sans JP', 'Noto Sans', sans-serif; font-size: 12pt; }
       .r::after { content: target-text(attr(href), first-letter); }
     </style></head><body>
       <p>Open <a class="r" href="#h">the heading</a> reference.</p>
       <h2 id="h">「Hello」</h2>
     </body></html>"##;
-    let pdf = tagged_render_with_noto(html);
+
+    let fonts_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/.fonts");
+    let mut assets = AssetBundle::default();
+    for name in ["NotoSans-Regular.ttf", "NotoSansJP-Regular.otf"] {
+        let path = fonts_dir.join(name);
+        assets
+            .add_font_file(&path)
+            .unwrap_or_else(|e| panic!("failed to load {}: {e}", path.display()));
+    }
+    assets.add_css(
+        "body { font-family: 'Noto Sans JP', 'Noto Sans', sans-serif; }",
+    );
+    let pdf = Engine::builder()
+        .tagged(true)
+        .lang("en")
+        .assets(assets)
+        .build()
+        .render_html(html)
+        .expect("tagged render");
     assert!(!pdf.is_empty());
 
-    let lower = decompressed_streams_lower(&pdf);
-    let needle = hex_utf16be("「H");
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
+    // The pseudo-element content `「H` must appear contiguously. `H`
+    // alone could come from the body's `<h2>` "Hello"; `「H` together
+    // proves compute_first_letter folded the leading CJK typographic
+    // punctuation into the first-letter result.
     assert!(
-        lower.contains(&needle.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for `「H` — compute_first_letter did \
-         not fold the leading typographic punctuation into the first \
-         letter per CSS Pseudo-Elements 4 §3.2. Looked for {needle} in {} \
-         bytes of decompressed streams.",
-        lower.len()
+        text.contains("「H"),
+        "extracted PDF text missing contiguous `「H` — \
+         compute_first_letter did not fold the leading typographic \
+         punctuation into the first letter per CSS Pseudo-Elements 4 \
+         §3.2. Got: {text:?}"
     );
 }
 
 /// fulgur-r73p Task 4.4: a `target-text(url, before)` whose target has
 /// no `::before` must resolve to the empty string — no panic, render
 /// still succeeds, and the surrounding literal `[` / `]` brackets still
-/// render (with nothing captured between them).
+/// render with nothing captured between them.
 #[test]
 fn target_text_empty_for_missing_pseudo() {
     let html = r##"<!doctype html><html><head><style>
@@ -3804,19 +3783,20 @@ fn target_text_empty_for_missing_pseudo() {
     let pdf = tagged_render_with_noto(html);
     assert!(!pdf.is_empty()); // resolves to "[]" — no panic, empty capture
 
-    // The literal brackets must be adjacent (`[]`, not `[X]`): a missing
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
+    // The brackets must be adjacent (`[]`, not `[X]`): a missing
     // `::before` resolves the inner target-text to EMPTY, so nothing is
-    // captured between them. Two separate `[`/`]` presence checks cannot
-    // distinguish `[]` from `[X]`; assert the contiguous UTF-16BE run.
-    let lower = decompressed_streams_lower(&pdf);
-    let needle = hex_utf16be("[]");
+    // captured between them. Asserting contiguous `[]` distinguishes
+    // this from a regression that inserts spurious content.
     assert!(
-        lower.contains(&needle.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for the contiguous `[]` literal — a \
-         missing `::before` should resolve target-text to the empty \
-         string, leaving the surrounding brackets adjacent (`[]`, not \
-         `[X]`). Looked for {needle} in {} bytes of decompressed streams.",
-        lower.len()
+        text.contains("[]"),
+        "extracted PDF text missing contiguous `[]` — a missing \
+         `::before` should resolve target-text to the empty string, \
+         leaving the surrounding brackets adjacent (`[]`, not `[X]`). \
+         Got: {text:?}"
     );
 }
 
@@ -3837,15 +3817,19 @@ fn pseudo_multi_item_content_renders_all_items() {
     let pdf = tagged_render_with_noto(html);
     assert!(!pdf.is_empty());
 
-    let lower = decompressed_streams_lower(&pdf);
-    let needle = hex_utf16be("[x]");
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
+    // Contiguous `[x]` proves all three items rendered in order.
+    // Checking `[`, `x`, `]` individually would not — `x` is already in
+    // "Body te**x**t", and `[`/`]` could each appear without the middle
+    // item if only items[0] and items[2] survived.
     assert!(
-        lower.contains(&needle.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for the contiguous `[x]` — a \
-         multi-item `::after` content list must render ALL items, not \
-         just the first `[`. Looked for {needle} in {} bytes of \
-         decompressed streams.",
-        lower.len()
+        text.contains("[x]"),
+        "extracted PDF text missing contiguous `[x]` — a multi-item \
+         `::after` content list must render ALL items, not just the \
+         first `[`. Got: {text:?}"
     );
 }
 
@@ -3869,24 +3853,25 @@ fn pseudo_three_item_counter_content_before_and_single_item_unchanged() {
     let pdf = tagged_render_with_noto(html);
     assert!(!pdf.is_empty());
 
-    let lower = decompressed_streams_lower(&pdf);
-    let three_item = hex_utf16be("[1]");
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
+    // Contiguous `[1]` proves all three items (string + counter() +
+    // string) rendered together and the counter resolved to 1.
     assert!(
-        lower.contains(&three_item.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for the contiguous `[1]` — a 3-item \
+        text.contains("[1]"),
+        "extracted PDF text missing contiguous `[1]` — a 3-item \
          `::before` content list (string + counter() + string) must \
-         render ALL items in order. Looked for {three_item} in {} bytes.",
-        lower.len()
+         render ALL items in order. Got: {text:?}"
     );
-    // Single-item plain `::after` content still renders (Blitz native
-    // path, unchanged): the lone `.` is present.
-    let single = hex_utf16be(".");
+    // Single-item plain `::after` content still renders via Blitz's
+    // native path (the lone `.` after "Body").
     assert!(
-        lower.contains(&single.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for the single-item `.` — \
-         single-item pseudo content must keep rendering via Blitz's \
-         native path. Looked for {single} in {} bytes.",
-        lower.len()
+        text.contains("Body."),
+        "extracted PDF text missing `Body.` — single-item pseudo \
+         content (`.`) must keep rendering via Blitz's native path. \
+         Got: {text:?}"
     );
 }
 
@@ -3915,17 +3900,18 @@ fn pseudo_multi_item_content_via_inline_style_id_selector() {
     let pdf = tagged_render_with_noto(html);
     assert!(!pdf.is_empty());
 
-    let lower = decompressed_streams_lower(&pdf);
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
     // `#s` is the second `h2`, so counter `c` == 2. All three items must
     // render contiguously as `[2]`, not the truncated leading `[`.
-    let needle = hex_utf16be("[2]");
     assert!(
-        lower.contains(&needle.to_ascii_lowercase()),
-        "ActualText missing UTF-16BE for the contiguous `[2]` — a \
-         multi-item `::before` content list selected by an ID selector in \
-         an inline `<style>` must render ALL items. The CounterPass \
-         injected rule must out-specify the surviving author `#s::before` \
-         rule. Looked for {needle} in {} bytes of decompressed streams.",
-        lower.len()
+        text.contains("[2]"),
+        "extracted PDF text missing contiguous `[2]` — a multi-item \
+         `::before` content list selected by an ID selector in an inline \
+         `<style>` must render ALL items. The CounterPass injected rule \
+         must out-specify the surviving author `#s::before` rule. \
+         Got: {text:?}"
     );
 }

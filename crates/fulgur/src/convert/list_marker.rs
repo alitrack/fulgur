@@ -1,5 +1,6 @@
 use super::*;
 use crate::blitz_adapter::{Marker, marker_skrifa_text, marker_to_string};
+use crate::paragraph::compute_glyph_text_range;
 
 /// Resolve a node's computed `list-style-image` to bundled asset bytes and
 /// detected asset kind. Returns `None` when there is no `list-style-image`,
@@ -201,17 +202,28 @@ pub(super) fn extract_marker_lines(
                 let brush = &glyph_run.style().brush;
                 let color = get_text_color(doc, brush.id);
 
-                let text_len = marker_text.len();
                 let mut glyphs = Vec::new();
-                for g in glyph_run.glyphs() {
-                    line_width += px_to_pt(g.advance);
-                    glyphs.push(ShapedGlyph {
-                        id: g.id,
-                        x_advance: g.advance / font_size_parley,
-                        x_offset: g.x / font_size_parley,
-                        y_offset: g.y / font_size_parley,
-                        text_range: 0..text_len,
-                    });
+                let run = glyph_run.run();
+                for cluster in run.visual_clusters() {
+                    let cluster_range = cluster.text_range();
+                    let cluster_glyphs: Vec<_> = cluster.glyphs().collect();
+                    let cluster_glyph_count = cluster_glyphs.len();
+
+                    for (glyph_index, g) in cluster_glyphs.iter().enumerate() {
+                        let text_range = compute_glyph_text_range(
+                            cluster_range.clone(),
+                            cluster_glyph_count,
+                            glyph_index,
+                        );
+                        line_width += px_to_pt(g.advance);
+                        glyphs.push(ShapedGlyph {
+                            id: g.id,
+                            x_advance: g.advance / font_size_parley,
+                            x_offset: g.x / font_size_parley,
+                            y_offset: g.y / font_size_parley,
+                            text_range,
+                        });
+                    }
                 }
 
                 if !glyphs.is_empty() {

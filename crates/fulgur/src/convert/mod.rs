@@ -19,6 +19,7 @@ use crate::image::ImageRender;
 use crate::paragraph::{
     InlineImage, LineFontMetrics, LineItem, LinkSpan, LinkTarget, ShapedGlyph, ShapedGlyphRun,
     ShapedLine, TextDecoration, TextDecorationLine, TextDecorationStyle, VerticalAlign,
+    compute_glyph_text_range,
 };
 use blitz_html::HtmlDocument;
 use skrifa::MetadataProvider;
@@ -915,16 +916,27 @@ fn shape_paragraph_glyph_runs(
                 let decoration = get_text_decoration(doc, brush.id);
                 let link = ctx.link_cache.lookup(doc, brush.id);
 
-                let text_len = text.len();
                 let mut glyphs = Vec::new();
-                for g in glyph_run.glyphs() {
-                    glyphs.push(ShapedGlyph {
-                        id: g.id,
-                        x_advance: g.advance / font_size_parley,
-                        x_offset: g.x / font_size_parley,
-                        y_offset: g.y / font_size_parley,
-                        text_range: 0..text_len,
-                    });
+                let run = glyph_run.run();
+                for cluster in run.visual_clusters() {
+                    let cluster_range = cluster.text_range();
+                    let cluster_glyphs: Vec<_> = cluster.glyphs().collect();
+                    let cluster_glyph_count = cluster_glyphs.len();
+
+                    for (glyph_index, g) in cluster_glyphs.iter().enumerate() {
+                        let text_range = compute_glyph_text_range(
+                            cluster_range.clone(),
+                            cluster_glyph_count,
+                            glyph_index,
+                        );
+                        glyphs.push(ShapedGlyph {
+                            id: g.id,
+                            x_advance: g.advance / font_size_parley,
+                            x_offset: g.x / font_size_parley,
+                            y_offset: g.y / font_size_parley,
+                            text_range,
+                        });
+                    }
                 }
 
                 if !glyphs.is_empty() {

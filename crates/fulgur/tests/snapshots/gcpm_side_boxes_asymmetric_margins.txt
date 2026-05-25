@@ -65,7 +65,7 @@ endobj
 
 6 0 obj
 <<
-  /Length 2473
+  /Length 984
   /Type /CMap
   /WMode 0
 >>
@@ -92,15 +92,34 @@ end def
 1 begincodespacerange
 <0000> <FFFF>
 endcodespacerange
-8 beginbfchar
-<0001> <0042006F0064007900200063006F006E00740065006E0074002000770069007400680020006100730079006D006D00650074007200690063002000730069006400650020006D0061007200670069006E0073002E>
-<0002> <0041002000760065007200790020006C006F006E0067002000630068006100700074006500720020006C006100620065006C00200074006800610074002000730068006F0075006C00640020007700720061007000200064006900660066006500720065006E0074006C00790020006F006E0020006500610063006800200073006900640065>
-<0003> <0041002000760065007200790020006C006F006E0067002000630068006100700074006500720020006C006100620065006C00200074006800610074002000730068006F0075006C00640020007700720061007000200064006900660066006500720065006E0074006C00790020006F006E0020006500610063006800200073006900640065>
-<0006> <0041002000760065007200790020006C006F006E0067002000630068006100700074006500720020006C006100620065006C00200074006800610074002000730068006F0075006C00640020007700720061007000200064006900660066006500720065006E0074006C00790020006F006E0020006500610063006800200073006900640065>
-<000E> <0041002000760065007200790020006C006F006E0067002000630068006100700074006500720020006C006100620065006C00200074006800610074002000730068006F0075006C00640020007700720061007000200064006900660066006500720065006E0074006C00790020006F006E0020006500610063006800200073006900640065>
-<0013> <0041002000760065007200790020006C006F006E0067002000630068006100700074006500720020006C006100620065006C00200074006800610074002000730068006F0075006C00640020007700720061007000200064006900660066006500720065006E0074006C00790020006F006E0020006500610063006800200073006900640065>
-<0015> <0041002000760065007200790020006C006F006E0067002000630068006100700074006500720020006C006100620065006C00200074006800610074002000730068006F0075006C00640020007700720061007000200064006900660066006500720065006E0074006C00790020006F006E0020006500610063006800200073006900640065>
-<001A> <002D00200031>
+27 beginbfchar
+<0001> <0042>
+<0002> <006F>
+<0003> <0064>
+<0004> <0079>
+<0005> <0020>
+<0006> <0063>
+<0007> <006E>
+<0008> <0074>
+<0009> <0065>
+<000A> <0077>
+<000B> <0069>
+<000C> <0068>
+<000D> <0061>
+<000E> <0073>
+<000F> <006D>
+<0010> <0072>
+<0011> <0067>
+<0012> <002E>
+<0013> <0041>
+<0014> <0076>
+<0015> <006C>
+<0016> <0070>
+<0017> <0062>
+<0018> <0075>
+<0019> <0066>
+<001A> <002D>
+<001B> <0031>
 endbfchar
 endcmap
 CMapName currentdict /CMap defineresource pop
@@ -212,161 +231,117 @@ endobj
 
 9 0 obj
 <<
-  /Length 3322
+  /Length 2331
 >>
 stream
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (Body content with asymmetric side margins.)
->> BDC
 0 Tr
 /f0 12 Tf
 1 0 0 -1 42 95.25 Tm
 [(\000\001\000\002\000\003\000\004\000\005\000\006\000\002\000\007\000\b\000\t\000\007\000\b\000\005\000\n\000\013\000\b\000\f\000\005\000\r\000\016\000\004\000\017\000\017\000\t\000\b\000\020\000\013\000\006\000\005\000\016\000\013\000\003\000\t\000\005\000\017\000\r) -0.0010070801 (\000\020) 9.9999695 (\000\021\000\013\000\007\000\016\000\022)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (A very long chapter label that should wrap differently on each side)
->> BDC
 0 Tr
 /f0 6 Tf
 1 0 0 -1 0 78 Tm
 [(\000\023\000\005\000\024\000\t\000\020\000\004\000\005\000\025\000\002\000\007\000\021\000\005)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (A very long chapter label that should wrap differently on each side)
->> BDC
 0 Tr
 /f0 6 Tf
 1 0 0 -1 0 85.5 Tm
 [(\000\006\000\f\000\r\000\026\000\b\000\t\000\020\000\005)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (A very long chapter label that should wrap differently on each side)
->> BDC
 0 Tr
 /f0 6 Tf
 1 0 0 -1 0 92.25 Tm
 [(\000\025\000\r\000\027\000\t\000\025\000\005\000\b\000\f\000\r\000\b\000\005)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (A very long chapter label that should wrap differently on each side)
->> BDC
 0 Tr
 /f0 6 Tf
 1 0 0 -1 0 99.75 Tm
 [(\000\016\000\f\000\002\000\030\000\025\000\003\000\005\000\n\000\020) 19.999908 (\000\r\000\026\000\005)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (A very long chapter label that should wrap differently on each side)
->> BDC
 0 Tr
 /f0 6 Tf
 1 0 0 -1 0 106.5 Tm
 [(\000\003\000\013\000\031\000\t\000\020) 19.99997 (\000\t\000\007\000\b\000\025\000\004\000\005)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (A very long chapter label that should wrap differently on each side)
->> BDC
 0 Tr
 /f0 6 Tf
 1 0 0 -1 0 114 Tm
 [(\000\002\000\007\000\005\000\t\000\r\000\006\000\f\000\005\000\016\000\013\000\003\000\t)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (- 1)
->> BDC
 0 Tr
 /f0 6 Tf
 1 0 0 -1 0 121.5 Tm
 [(\000\032\000\005\000\033)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (A very long chapter label that should wrap differently on each side)
->> BDC
 0 Tr
 /f0 6 Tf
 1 0 0 -1 451.28003 78 Tm
 [(\000\023\000\005\000\024\000\t\000\020\000\004\000\005\000\025\000\002\000\007\000\021\000\005\000\006\000\f\000\r\000\026\000\b\000\t\000\020\000\005\000\025\000\r\000\027\000\t\000\025\000\005\000\b\000\f\000\r\000\b\000\005\000\016\000\f\000\002\000\030\000\025\000\003\000\005\000\n\000\020) 19.999146 (\000\r\000\026\000\005)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (A very long chapter label that should wrap differently on each side)
->> BDC
 0 Tr
 /f0 6 Tf
 1 0 0 -1 451.28003 85.5 Tm
 [(\000\003\000\013\000\031\000\t\000\020) 19.99997 (\000\t\000\007\000\b\000\025\000\004\000\005\000\002\000\007\000\005\000\t\000\r\000\006\000\f\000\005\000\016\000\013\000\003\000\t)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (- 1)
->> BDC
 0 Tr
 /f0 6 Tf
 1 0 0 -1 451.28003 92.25 Tm
 [(\000\032\000\005\000\033)] TJ
-EMC
 ET
 Q
 endstream
@@ -385,7 +360,7 @@ endobj
   /Subtype /XML
 >>
 stream
-<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="xmp-writer"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"  xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"  xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/"  xmlns:pdf="http://ns.adobe.com/pdf/1.3/" ><pdf:Producer>fulgur</pdf:Producer><xmpTPg:NPages>1</xmpTPg:NPages><dc:format>application/pdf</dc:format><xmpMM:InstanceID>0NLzwsIFftLOmd1lPFD7Eg==</xmpMM:InstanceID><xmpMM:DocumentID>0NLzwsIFftLOmd1lPFD7Eg==</xmpMM:DocumentID><xmpMM:RenditionClass>proof</xmpMM:RenditionClass><pdf:PDFVersion>1.7</pdf:PDFVersion></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="r"?>
+<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="xmp-writer"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"  xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"  xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/"  xmlns:pdf="http://ns.adobe.com/pdf/1.3/" ><pdf:Producer>fulgur</pdf:Producer><xmpTPg:NPages>1</xmpTPg:NPages><dc:format>application/pdf</dc:format><xmpMM:InstanceID>4yf7ghJ1WsmdCYUj5O2ajg==</xmpMM:InstanceID><xmpMM:DocumentID>4yf7ghJ1WsmdCYUj5O2ajg==</xmpMM:DocumentID><xmpMM:RenditionClass>proof</xmpMM:RenditionClass><pdf:PDFVersion>1.7</pdf:PDFVersion></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="r"?>
 endstream
 endobj
 
@@ -406,19 +381,19 @@ xref
 0000000749 00000 n
 0000000867 00000 n
 0000001109 00000 n
-0000003662 00000 n
-0000009012 00000 n
-0000009213 00000 n
-0000012590 00000 n
-0000012634 00000 n
-0000013484 00000 n
+0000002172 00000 n
+0000007522 00000 n
+0000007723 00000 n
+0000010109 00000 n
+0000010153 00000 n
+0000011003 00000 n
 trailer
 <<
   /Size 13
   /Root 12 0 R
   /Info 10 0 R
-  /ID [(0NLzwsIFftLOmd1lPFD7Eg==) (0NLzwsIFftLOmd1lPFD7Eg==)]
+  /ID [(4yf7ghJ1WsmdCYUj5O2ajg==) (4yf7ghJ1WsmdCYUj5O2ajg==)]
 >>
 startxref
-13558
+11077
 %%EOF
