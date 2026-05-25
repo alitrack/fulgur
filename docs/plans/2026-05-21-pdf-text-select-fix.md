@@ -17,6 +17,7 @@ The PDF text selection mechanism relies on each glyph having an accurate `text_r
 The bug was that **all glyphs in a paragraph were assigned the same text range: `0..text_len`**, where `text_len` was the length of the entire paragraph. This meant every glyph claimed to represent the entire text.
 
 When a PDF reader processes text selection:
+
 1. It maps the cursor position to a specific glyph
 2. It uses that glyph's `text_range` to determine what text to select
 3. Since all glyphs had `0..text_len`, selecting any glyph selected the entire paragraph
@@ -50,6 +51,7 @@ for g in glyph_run.glyphs() {
 ```
 
 The same issue existed in two other locations:
+
 - `crates/fulgur/src/convert/list_marker.rs` - list marker text
 - `crates/fulgur/src/convert/mod.rs` - multi-column paragraph text
 
@@ -64,6 +66,7 @@ The debugging process involved understanding the relationship between:
 | `text_range` | The span of text in the original string that this cluster represents |
 
 Key insights:
+
 1. Parley's `GlyphRun` contains multiple `Cluster`s
 2. Each `Cluster` has a `text_range()` method that returns the correct text span
 3. A `Cluster` can contain multiple `Glyph`s (e.g., for ligatures like "fi")
@@ -119,18 +122,22 @@ pub(super) fn compute_glyph_text_range(
 ### Files Modified
 
 #### 1. `crates/fulgur/src/paragraph.rs`
+
 - Added `compute_glyph_text_range()` helper function
 - Added documentation explaining the `text_range` field in `ShapedGlyph`
 
 #### 2. `crates/fulgur/src/convert/inline_root.rs`
+
 - Modified `extract_paragraph()` to iterate over `clusters()` instead of `glyphs()`
 - Each glyph now gets a computed text range based on its cluster
 
 #### 3. `crates/fulgur/src/convert/list_marker.rs`
+
 - Modified `shape_marker_with_skrifa()` to use the same cluster-based approach
 - Added import for `compute_glyph_text_range`
 
 #### 4. `crates/fulgur/src/convert/mod.rs`
+
 - Modified `shape_paragraph_glyph_runs()` to use the same cluster-based approach
 - Added import for `compute_glyph_text_range`
 
@@ -153,6 +160,7 @@ pub(super) fn compute_glyph_text_range(
 ### Why This Works
 
 The fix ensures that:
+
 1. Each **cluster** has the correct text range from Parley
 2. Each **glyph** within a cluster gets a portion of that range
 3. The PDF reader can map selections to the correct text portions
@@ -181,6 +189,7 @@ fn shape_marker_with_skrifa_text_ranges_cover_full_string() {
 ```
 
 Additional tests in `fulgur/tests/render_smoke.rs` verify:
+
 - Tagged PDF structure trees are correct
 - ActualText markers in tagged PDFs contain the expected content
 - Multi-item content lists render all items correctly

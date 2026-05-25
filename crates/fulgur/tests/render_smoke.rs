@@ -3738,9 +3738,7 @@ fn target_text_first_letter_typographic() {
             .add_font_file(&path)
             .unwrap_or_else(|e| panic!("failed to load {}: {e}", path.display()));
     }
-    assets.add_css(
-        "body { font-family: 'Noto Sans JP', 'Noto Sans', sans-serif; }",
-    );
+    assets.add_css("body { font-family: 'Noto Sans JP', 'Noto Sans', sans-serif; }");
     let pdf = Engine::builder()
         .tagged(true)
         .lang("en")
