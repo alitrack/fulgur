@@ -61,11 +61,10 @@ impl TextDecoration {
 
 /// A pre-extracted glyph for rendering via Krilla.
 ///
-/// `text_range` indicates which portion of the paragraph text this glyph
-/// represents. For proper text selection, each glyph should have a range
-/// that corresponds to its position in the original text. When multiple
-/// glyphs belong to the same cluster (e.g., ligatures), the cluster's
-/// text range should be distributed among them.
+/// `text_range` is the byte range in the original text that this glyph's
+/// cluster represents. All glyphs belonging to the same cluster (e.g. a
+/// ligature) share the same range — this is the correct PDF convention and
+/// avoids splitting UTF-8 character boundaries.
 #[derive(Clone, Debug)]
 pub struct ShapedGlyph {
     pub id: u32,
@@ -75,33 +74,6 @@ pub struct ShapedGlyph {
     pub text_range: std::ops::Range<usize>,
 }
 
-/// Compute the text range for a glyph within its cluster.
-///
-/// When a cluster has multiple glyphs (e.g., ligatures), we distribute
-/// the cluster's text range evenly among them. For single-glyph clusters,
-/// the glyph gets the full cluster text range.
-pub(super) fn compute_glyph_text_range(
-    cluster_range: std::ops::Range<usize>,
-    cluster_glyph_count: usize,
-    glyph_index: usize,
-) -> std::ops::Range<usize> {
-    if cluster_glyph_count == 1 {
-        // Single glyph cluster - gets the full range
-        cluster_range
-    } else {
-        // Multiple glyphs - distribute the range evenly
-        // This ensures each glyph covers a portion of the cluster's text
-        let len = cluster_range.end - cluster_range.start;
-        let chunk_size = len / cluster_glyph_count;
-        let remainder = len % cluster_glyph_count;
-
-        // Distribute remainder among first 'remainder' glyphs
-        let start_offset = chunk_size * glyph_index + (glyph_index).min(remainder);
-        let chunk_size = chunk_size + (glyph_index < remainder) as usize;
-
-        cluster_range.start + start_offset..cluster_range.start + start_offset + chunk_size
-    }
-}
 
 /// Target for a clickable link in PDF output.
 #[derive(Debug, Clone, PartialEq, Eq)]

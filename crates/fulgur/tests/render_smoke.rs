@@ -35,6 +35,17 @@ fn check_pdf_snapshot(name: &str, pdf: &[u8]) {
     }
 }
 
+fn noto_engine() -> Engine {
+    let font_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/.fonts/NotoSans-Regular.ttf");
+    let mut assets = AssetBundle::default();
+    assets
+        .add_font_file(&font_path)
+        .unwrap_or_else(|e| panic!("failed to load Noto Sans from {}: {e}", font_path.display()));
+    assets.add_css("body { font-family: 'Noto Sans', sans-serif; }");
+    Engine::builder().assets(assets).build()
+}
+
 fn tagged_render_with_noto(html: &str) -> Vec<u8> {
     let font_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/.fonts/NotoSans-Regular.ttf");
@@ -3912,4 +3923,235 @@ fn pseudo_multi_item_content_via_inline_style_id_selector() {
          must out-specify the surviving author `#s::before` rule. \
          Got: {text:?}"
     );
+}
+
+// ── ShapedGlyph text_range invariant tests ────────────────────────────────
+//
+// The invariant under test: selecting a contiguous run of glyphs should copy
+// exactly the characters those glyphs represent — nothing more, nothing less.
+// A PDF reader determines what to copy by taking the union of selected glyphs'
+// `text_range`s.
+//
+// The original bug assigned `0..text.len()` to every glyph, so selecting any
+// single glyph would union to the entire paragraph string.  These tests
+// reconstruct the copied text from the glyph array and compare it to the
+// expected string, so they fail on that bug and pass on the fix.
+//
+// No PDF rendering needed — the invariants live on the `ShapedGlyph` array
+// that the PDF encoder consumes, so `build_drawables_for_testing_no_gcpm`
+// is sufficient.
+
+/// Collect every `ShapedGlyphRun` from paragraphs and list markers.
+fn collect_text_runs(
+    drawables: &fulgur::drawables::Drawables,
+) -> Vec<fulgur::paragraph::ShapedGlyphRun> {
+    use fulgur::drawables::ListItemMarker;
+    use fulgur::paragraph::{LineItem, ShapedLine};
+
+    fn from_lines(lines: &[ShapedLine], out: &mut Vec<fulgur::paragraph::ShapedGlyphRun>) {
+        for line in lines {
+            for item in &line.items {
+                if let LineItem::Text(run) = item {
+                    out.push(run.clone());
+                }
+            }
+        }
+    }
+
+    let mut runs = Vec::new();
+    for entry in drawables.paragraphs.values() {
+        from_lines(&entry.lines, &mut runs);
+    }
+    for entry in drawables.paragraph_slices.values() {
+        for slice in &entry.slices {
+            from_lines(&slice.lines, &mut runs);
+        }
+    }
+    for entry in drawables.list_items.values() {
+        if let ListItemMarker::Text { lines, .. } = &entry.marker {
+            from_lines(lines, &mut runs);
+        }
+    }
+    runs
+}
+
+/// Simulate "select all glyphs in this run and copy".
+///
+/// Consecutive glyphs that share a `text_range` belong to the same cluster
+/// (e.g. a base letter + combining diacritic, or a ligature glyph); they are
+/// deduplicated so each cluster contributes its text exactly once.
+///
+/// Panics immediately if any range is out of bounds or splits a UTF-8
+/// character boundary — the panic message identifies the offending glyph.
+fn copy_run(run: &fulgur::paragraph::ShapedGlyphRun) -> String {
+    cluster_strings(run).join("")
+}
+
+/// Return the decoded string for each distinct cluster in the run, in order.
+/// Glyphs sharing a `text_range` (same cluster) produce one entry.
+/// Panics on any invalid range.
+fn cluster_strings(run: &fulgur::paragraph::ShapedGlyphRun) -> Vec<String> {
+    let text = &run.text;
+    let mut out: Vec<String> = Vec::new();
+    let mut prev: Option<std::ops::Range<usize>> = None;
+    for (gi, glyph) in run.glyphs.iter().enumerate() {
+        let r = &glyph.text_range;
+        assert!(r.end <= text.len(),
+            "glyph {gi}: range end {} > text.len() {} in {text:?}", r.end, text.len());
+        assert!(r.start < r.end,
+            "glyph {gi}: empty range {}..{} in {text:?}", r.start, r.end);
+        assert!(text.is_char_boundary(r.start),
+            "glyph {gi}: start {} splits a UTF-8 char in {text:?}", r.start);
+        assert!(text.is_char_boundary(r.end),
+            "glyph {gi}: end {} splits a UTF-8 char in {text:?}", r.end);
+        if prev.as_ref() != Some(r) {
+            out.push(text[r.clone()].to_string());
+            prev = Some(r.clone());
+        }
+    }
+    out
+}
+
+/// Simulate selecting glyphs `glyph_range` in `run` and assert the copied
+/// text equals `expected`.  Union of their `text_range`s gives the selection.
+fn assert_selection(
+    run: &fulgur::paragraph::ShapedGlyphRun,
+    glyph_range: std::ops::Range<usize>,
+    expected: &str,
+) {
+    let glyphs = &run.glyphs[glyph_range.clone()];
+    let sel_start = glyphs.iter().map(|g| g.text_range.start).min().unwrap();
+    let sel_end = glyphs.iter().map(|g| g.text_range.end).max().unwrap();
+    let copied = &run.text[sel_start..sel_end];
+    assert_eq!(
+        copied, expected,
+        "selecting glyphs {}..{} copied {copied:?} instead of {expected:?}",
+        glyph_range.start, glyph_range.end,
+    );
+}
+
+#[test]
+fn selecting_first_word_copies_only_first_word() {
+    // "Hello World" — select glyphs 0..5 ("Hello"), expect "Hello" back.
+    // Old bug: every glyph has range 0..11, so the union = "Hello World".
+    let d = noto_engine()
+        .build_drawables_for_testing_no_gcpm("<html><body><p>Hello World</p></body></html>");
+    let runs = collect_text_runs(&d);
+    let run = runs.iter().find(|r| r.text.contains("Hello World"))
+        .expect("no run containing 'Hello World'");
+    assert_selection(run, 0..5, "Hello");
+    assert_selection(run, 6..11, "World");
+}
+
+#[test]
+fn each_ascii_glyph_copies_its_own_character() {
+    // One glyph per ASCII character.  Copying glyph i should yield text[i].
+    // Old bug: every glyph copies "Hello World" (the whole paragraph).
+    let d = noto_engine()
+        .build_drawables_for_testing_no_gcpm("<html><body><p>Hello World</p></body></html>");
+    let runs = collect_text_runs(&d);
+    let run = runs.iter().find(|r| r.text.contains("Hello World"))
+        .expect("no run containing 'Hello World'");
+    let expected_chars: Vec<char> = "Hello World".chars().collect();
+    for (gi, glyph) in run.glyphs.iter().enumerate() {
+        let copied = &run.text[glyph.text_range.clone()];
+        assert_eq!(
+            copied,
+            expected_chars[gi].to_string(),
+            "glyph {gi} copied {copied:?}, expected {:?}",
+            expected_chars[gi],
+        );
+    }
+}
+
+#[test]
+fn each_multibyte_glyph_copies_its_own_character() {
+    // é = U+00E9 (2 bytes), € = U+20AC (3 bytes).
+    // Each cluster must decode to exactly its own character.
+    // Old bug: all glyphs claim 0..text.len(), so cluster_strings collapses
+    // to a single entry ["café €42"] instead of one entry per character.
+    //
+    // We concatenate cluster_strings across all runs because run.text is the
+    // full paragraph string for every run — searching by text.contains() would
+    // match any run in the paragraph and might miss characters covered by a
+    // later run (e.g. if a font fallback splits the paragraph mid-way).
+    let d = noto_engine().build_drawables_for_testing_no_gcpm(
+        "<html><body><p>café €42</p></body></html>",
+    );
+    let all_clusters: Vec<String> = collect_text_runs(&d)
+        .iter()
+        .flat_map(|r| cluster_strings(r))
+        .collect();
+    assert_eq!(all_clusters, vec!["c", "a", "f", "é", " ", "€", "4", "2"]);
+}
+
+#[test]
+fn each_line_in_multiline_paragraph_copies_only_its_own_text() {
+    // "First<br>Second" — the two lines share the same run.text but their
+    // glyphs must not bleed into each other's text.
+    // Old bug: every glyph has range 0..len("First\nSecond"), so copying
+    // any run yields the entire string instead of just that line.
+    let d = noto_engine().build_drawables_for_testing_no_gcpm(
+        "<html><body><p>First<br>Second</p></body></html>",
+    );
+    let copied: Vec<String> = collect_text_runs(&d).iter().map(copy_run).collect();
+    assert!(copied.contains(&"First".to_string()),
+        "no run copies exactly 'First'; got {copied:?}");
+    assert!(copied.contains(&"Second".to_string()),
+        "no run copies exactly 'Second'; got {copied:?}");
+}
+
+#[test]
+fn bold_span_copies_only_bold_text() {
+    // <strong> creates a style boundary.  The run covering "bold" must copy
+    // only "bold", not the whole paragraph "Normal bold text".
+    let d = noto_engine().build_drawables_for_testing_no_gcpm(
+        "<html><body><p>Normal <strong>bold</strong> text</p></body></html>",
+    );
+    let copied: Vec<String> = collect_text_runs(&d).iter().map(copy_run).collect();
+    assert!(copied.contains(&"bold".to_string()),
+        "no run copies exactly 'bold'; got {copied:?}");
+}
+
+#[test]
+fn list_marker_copies_correct_text() {
+    // List markers are shaped by a separate code path (shape_marker_with_skrifa).
+    // The body text "item" must decode one character per cluster.
+    // Old bug: all glyphs claim 0..4, cluster_strings returns ["item"] not
+    // ["i","t","e","m"].
+    let d = noto_engine().build_drawables_for_testing_no_gcpm(
+        "<html><body><ul><li>item</li></ul></body></html>",
+    );
+    // Find the run that actually covers "item" by checking what it decodes to,
+    // not by run.text (which is the full paragraph string for every run).
+    let runs = collect_text_runs(&d);
+    let run = runs.iter().find(|r| copy_run(r) == "item")
+        .expect("no run that copies exactly 'item'");
+    assert_eq!(cluster_strings(run), vec!["i", "t", "e", "m"]);
+}
+
+#[test]
+fn cjk_glyphs_copy_correct_characters() {
+    // 你好世界 — each character is 3 UTF-8 bytes.
+    // cluster_strings must return one entry per character.
+    // Old bug: all glyphs claim 0..12, collapsing to ["你好世界"] instead of
+    // ["你","好","世","界"].  Any byte-level split of 3-byte chars would
+    // also panic on the char-boundary assertion inside cluster_strings.
+    let jp_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/.fonts/NotoSansJP-Regular.otf");
+    let latin_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/.fonts/NotoSans-Regular.ttf");
+    let mut assets = AssetBundle::default();
+    assets.add_font_file(&latin_path).expect("NotoSans");
+    assets.add_font_file(&jp_path).expect("NotoSansJP");
+    assets.add_css("body { font-family: 'Noto Sans JP', 'Noto Sans', sans-serif; }");
+    let engine = Engine::builder().assets(assets).build();
+    let d = engine.build_drawables_for_testing_no_gcpm(
+        "<html><body><p>你好世界</p></body></html>",
+    );
+    let all_clusters: Vec<String> = collect_text_runs(&d)
+        .iter()
+        .flat_map(|r| cluster_strings(r))
+        .collect();
+    assert_eq!(all_clusters, vec!["你", "好", "世", "界"]);
 }

@@ -1,6 +1,6 @@
 use super::*;
 use super::{list_marker, positioned, pseudo};
-use crate::paragraph::{InlineBoxItem, ParagraphRender, compute_glyph_text_range};
+use crate::paragraph::{InlineBoxItem, ParagraphRender};
 
 /// Dispatcher entry for inline-root nodes (those with `node.flags.is_inline_root()`).
 ///
@@ -474,28 +474,17 @@ pub(super) fn extract_paragraph(
                     let decoration = get_text_decoration(doc, brush.id);
                     let link = ctx.link_cache.lookup(doc, brush.id);
 
-                    // Extract glyphs by iterating over clusters first to get proper text ranges
-                    // Each cluster has a text_range, and may contain multiple glyphs (e.g., ligatures)
                     let mut glyphs = Vec::new();
                     let run = glyph_run.run();
                     for cluster in run.visual_clusters() {
-                        let cluster_range = cluster.text_range();
-                        let cluster_glyphs: Vec<_> = cluster.glyphs().collect();
-                        let cluster_glyph_count = cluster_glyphs.len();
-
-                        for (glyph_index, g) in cluster_glyphs.iter().enumerate() {
-                            let text_range = compute_glyph_text_range(
-                                cluster_range.clone(),
-                                cluster_glyph_count,
-                                glyph_index,
-                            );
-
+                        let text_range = cluster.text_range();
+                        for g in cluster.glyphs() {
                             glyphs.push(ShapedGlyph {
                                 id: g.id,
                                 x_advance: g.advance / font_size_parley,
                                 x_offset: g.x / font_size_parley,
                                 y_offset: g.y / font_size_parley,
-                                text_range,
+                                text_range: text_range.clone(),
                             });
                         }
                     }

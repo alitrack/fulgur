@@ -69,8 +69,8 @@ Key insights:
 
 1. Parley's `GlyphRun` contains multiple `Cluster`s
 2. Each `Cluster` has a `text_range()` method that returns the correct text span
-3. A `Cluster` can contain multiple `Glyph`s (e.g., for ligatures like "fi")
-4. Each glyph within a cluster should get a portion of the cluster's text range
+3. A `Cluster` can contain multiple `Glyph`s (e.g., diacritics or combining marks)
+4. All glyphs within a cluster should share the cluster's text range — this is the correct PDF convention
 
 ### Krilla API Requirements
 
@@ -78,43 +78,32 @@ The Krilla library's `KrillaGlyph` documentation states:
 
 > `text_range`: The range in the original text that corresponds to the **cluster** of the glyph.
 
-This clarified that the text range should be at the cluster level, not the glyph level. When multiple glyphs belong to the same cluster, the cluster's text range needs to be distributed among them.
+The text range lives at the cluster level, not the individual glyph level. All glyphs in a cluster share the same range; splitting the range byte-by-byte among glyphs would risk panics on multi-byte UTF-8 characters and is not how PDF text extraction works.
 
 ## The Fix
 
 ### Core Idea
 
-Iterate over **clusters** instead of individual glyphs, use each cluster's `text_range()`, and distribute that range among the glyphs in the cluster.
+Iterate over **clusters** instead of individual glyphs, use each cluster's `text_range()`, and assign that same range to every glyph in the cluster. This is what the PDF spec requires: the `text_range` annotation lives at the cluster boundary, not the individual glyph level.
+
+An earlier version of the fix attempted to distribute the cluster's byte range evenly among multi-glyph clusters (`compute_glyph_text_range`). This was removed after code review identified that byte-level arithmetic on UTF-8 ranges can panic when a split point lands inside a multi-byte character (e.g. CJK chars, emoji with ZWJ sequences). The PDF convention is for all glyphs in a cluster to share the cluster range, which is also simpler and correct.
 
 ### Implementation
 
-A helper function was added to `crates/fulgur/src/paragraph.rs`:
+The three call sites now iterate clusters and forward the cluster range to every glyph unchanged:
 
 ```rust
-/// Compute the text range for a glyph within its cluster.
-///
-/// When a cluster has multiple glyphs (e.g., ligatures), we distribute
-/// the cluster's text range evenly among them. For single-glyph clusters,
-/// the glyph gets the full cluster text range.
-pub(super) fn compute_glyph_text_range(
-    cluster_range: std::ops::Range<usize>,
-    cluster_glyph_count: usize,
-    glyph_index: usize,
-) -> std::ops::Range<usize> {
-    if cluster_glyph_count == 1 {
-        // Single glyph cluster - gets the full range
-        cluster_range
-    } else {
-        // Multiple glyphs - distribute the range evenly
-        let len = cluster_range.end - cluster_range.start;
-        let chunk_size = len / cluster_glyph_count;
-        let remainder = len % cluster_glyph_count;
-
-        // Distribute remainder among first 'remainder' glyphs
-        let start_offset = chunk_size * glyph_index + (glyph_index).min(remainder);
-        let chunk_size = chunk_size + (glyph_index < remainder) as usize;
-
-        cluster_range.start + start_offset..cluster_range.start + start_offset + chunk_size
+let run = glyph_run.run();
+for cluster in run.visual_clusters() {
+    let text_range = cluster.text_range();
+    for g in cluster.glyphs() {
+        glyphs.push(ShapedGlyph {
+            id: g.id,
+            x_advance: g.advance / font_size_parley,
+            x_offset: g.x / font_size_parley,
+            y_offset: g.y / font_size_parley,
+            text_range: text_range.clone(),
+        });
     }
 }
 ```
@@ -123,23 +112,20 @@ pub(super) fn compute_glyph_text_range(
 
 #### 1. `crates/fulgur/src/paragraph.rs`
 
-- Added `compute_glyph_text_range()` helper function
-- Added documentation explaining the `text_range` field in `ShapedGlyph`
+- Updated `ShapedGlyph` doc comment to document the cluster-level range convention
+- Removed `compute_glyph_text_range()` helper (byte-splitting was unsafe for UTF-8)
 
 #### 2. `crates/fulgur/src/convert/inline_root.rs`
 
-- Modified `extract_paragraph()` to iterate over `clusters()` instead of `glyphs()`
-- Each glyph now gets a computed text range based on its cluster
+- Modified `extract_paragraph()` to iterate `visual_clusters()` and share the cluster range across all glyphs in each cluster
 
 #### 3. `crates/fulgur/src/convert/list_marker.rs`
 
 - Modified `shape_marker_with_skrifa()` to use the same cluster-based approach
-- Added import for `compute_glyph_text_range`
 
 #### 4. `crates/fulgur/src/convert/mod.rs`
 
 - Modified `shape_paragraph_glyph_runs()` to use the same cluster-based approach
-- Added import for `compute_glyph_text_range`
 
 ## Verification
 
@@ -161,20 +147,19 @@ pub(super) fn compute_glyph_text_range(
 
 The fix ensures that:
 
-1. Each **cluster** has the correct text range from Parley
-2. Each **glyph** within a cluster gets a portion of that range
-3. The PDF reader can map selections to the correct text portions
+1. Each **cluster** carries the correct byte range from Parley's `text_range()`
+2. Every **glyph** within a cluster shares that range — matching the PDF spec
+3. The PDF reader maps a cursor position to a glyph, reads its range, and extracts exactly the characters that cluster represents
 
 ### Edge Cases Handled
 
-- **Single-glyph clusters**: The glyph gets the full cluster text range
-- **Multi-glyph clusters** (ligatures): The cluster's text range is divided among the glyphs
-- **Remainder distribution**: If the text length doesn't divide evenly, the first few glyphs get one extra character each
+- **Single-glyph clusters**: glyph gets the full cluster text range (unchanged behaviour)
+- **Multi-glyph clusters** (diacritics, combining marks): all glyphs share the cluster range; the reader reconstructs all codepoints from that range as a unit
+- **Multi-byte UTF-8 characters**: no byte arithmetic means no risk of splitting inside a codepoint
 
 ### Limitations
 
-- The fix assumes that text is evenly distributed among glyphs in a cluster. For complex scripts where this assumption may not hold, further refinement might be needed.
-- The fix doesn't affect the visual appearance of the PDF, only the text extraction/selection behavior.
+- The fix doesn't affect the visual appearance of the PDF, only the text extraction/selection behaviour.
 
 ## Testing
 
