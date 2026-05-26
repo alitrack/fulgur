@@ -5330,8 +5330,6 @@ mod tests {
     // ─── draw_block_inner_paint / draw_block_v2 smoke tests ──────────────
 
     fn make_block_entry_for_draw(
-        width: f32,
-        height: f32,
         visible: bool,
         layout_size: Option<crate::draw_primitives::Size>,
     ) -> crate::drawables::BlockEntry {
@@ -5361,8 +5359,6 @@ mod tests {
         // is_split=false → layout_size.height is used for the paint rect,
         // covering the `if is_split && frag.height > 0.0 { ... } else { s.height }` else arm.
         let entry = make_block_entry_for_draw(
-            80.0,
-            60.0,
             true,
             Some(crate::draw_primitives::Size {
                 width: 80.0,
@@ -5379,8 +5375,6 @@ mod tests {
     fn draw_block_inner_paint_split_uses_frag_height() {
         // is_split=true, frag.height > 0 → px_to_pt(frag.height) used for total_height.
         let entry = make_block_entry_for_draw(
-            80.0,
-            120.0,
             true,
             Some(crate::draw_primitives::Size {
                 width: 80.0,
@@ -5398,8 +5392,6 @@ mod tests {
         // is_split=true but frag.height == 0.0 → `frag.height > 0.0` is false
         // → layout_size.height used (same else arm as not-split, different condition).
         let entry = make_block_entry_for_draw(
-            80.0,
-            60.0,
             true,
             Some(crate::draw_primitives::Size {
                 width: 80.0,
@@ -5415,7 +5407,7 @@ mod tests {
     #[test]
     fn draw_block_inner_paint_no_layout_size_uses_frag_dimensions() {
         // layout_size=None → both width and height fall back to px_to_pt(frag.*).
-        let entry = make_block_entry_for_draw(0.0, 0.0, true, None);
+        let entry = make_block_entry_for_draw(true, None);
         let frag = make_frag_for_draw(100.0, 50.0);
         with_canvas_smoke(|canvas| {
             draw_block_inner_paint(canvas, &entry, 0.0, 0.0, &frag, false);
@@ -5426,8 +5418,6 @@ mod tests {
     fn draw_block_inner_paint_invisible_skips_paint_calls() {
         // visible=false → the `if entry.visible { ... }` block is skipped.
         let entry = make_block_entry_for_draw(
-            80.0,
-            60.0,
             false,
             Some(crate::draw_primitives::Size {
                 width: 80.0,
@@ -5443,8 +5433,6 @@ mod tests {
     #[test]
     fn draw_block_v2_smoke() {
         let entry = make_block_entry_for_draw(
-            80.0,
-            60.0,
             true,
             Some(crate::draw_primitives::Size {
                 width: 80.0,
@@ -5462,7 +5450,7 @@ mod tests {
     #[test]
     fn paint_root_block_v2_no_layout_size_is_noop() {
         // layout_size=None → `let Some(size) = entry.layout_size else { return; }` fires.
-        let entry = make_block_entry_for_draw(0.0, 0.0, true, None);
+        let entry = make_block_entry_for_draw(true, None);
         with_canvas_smoke(|canvas| {
             paint_root_block_v2(canvas, &entry, 0.0, 0.0, None);
         });
@@ -5471,8 +5459,6 @@ mod tests {
     #[test]
     fn paint_root_block_v2_with_layout_size_smoke() {
         let entry = make_block_entry_for_draw(
-            100.0,
-            80.0,
             true,
             Some(crate::draw_primitives::Size {
                 width: 100.0,
@@ -5488,8 +5474,6 @@ mod tests {
     fn paint_root_block_v2_height_override_smoke() {
         // height_override=Some(h) → `h` used instead of layout_size.height.
         let entry = make_block_entry_for_draw(
-            100.0,
-            80.0,
             true,
             Some(crate::draw_primitives::Size {
                 width: 100.0,
@@ -5505,8 +5489,6 @@ mod tests {
     fn paint_root_block_v2_invisible_skips_inner_paint() {
         // visible=false → `if entry.visible { ... }` inside draw_with_opacity is skipped.
         let entry = make_block_entry_for_draw(
-            100.0,
-            80.0,
             false,
             Some(crate::draw_primitives::Size {
                 width: 100.0,
