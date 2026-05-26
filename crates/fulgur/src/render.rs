@@ -5199,4 +5199,553 @@ mod tests {
         let (_, clip, _) = build_page_skip_sets(&d);
         assert!(clip.is_empty(), "empty clip_descendants → nothing added");
     }
+
+    // ─── Canvas smoke helper ──────────────────────────────────────────────
+
+    fn with_canvas_smoke<F: FnOnce(&mut crate::draw_primitives::Canvas<'_, '_>)>(f: F) {
+        let mut doc = krilla::Document::new();
+        let settings = krilla::page::PageSettings::from_wh(200.0, 200.0).expect("valid page size");
+        let mut page = doc.start_page_with(settings);
+        let mut surface = page.surface();
+        let mut canvas = crate::draw_primitives::Canvas {
+            surface: &mut surface,
+            bookmark_collector: None,
+            link_collector: None,
+            tag_collector: None,
+            link_run_node_id: None,
+        };
+        f(&mut canvas);
+    }
+
+    // ─── Minimal image bytes used by decode/draw tests ───────────────────
+
+    const TEST_PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    const TEST_JPEG_1X1: &[u8] = &[
+        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01,
+        0x01, 0x11, 0x00, 0xFF, 0xD9,
+    ];
+
+    const TEST_GIF_1X1: &[u8] = &[
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x3B,
+    ];
+
+    fn make_test_image_entry(
+        data: &[u8],
+        format: crate::image::ImageFormat,
+        visible: bool,
+    ) -> crate::drawables::ImageEntry {
+        crate::drawables::ImageEntry {
+            image_data: Arc::new(data.to_vec()),
+            format,
+            width: 10.0,
+            height: 10.0,
+            opacity: 1.0,
+            visible,
+        }
+    }
+
+    // ─── decode_image_for_v2 ──────────────────────────────────────────────
+
+    #[test]
+    fn decode_image_for_v2_png_valid_returns_some() {
+        let entry = make_test_image_entry(TEST_PNG_1X1, crate::image::ImageFormat::Png, true);
+        assert!(
+            decode_image_for_v2(&entry).is_some(),
+            "valid PNG should decode"
+        );
+    }
+
+    #[test]
+    fn decode_image_for_v2_jpeg_branch_invalid_returns_none() {
+        // Covers the ImageFormat::Jpeg arm: a header-only JPEG with no scan data
+        // is rejected by the decoder → None (graceful handling of malformed input).
+        let entry = make_test_image_entry(TEST_JPEG_1X1, crate::image::ImageFormat::Jpeg, true);
+        assert!(
+            decode_image_for_v2(&entry).is_none(),
+            "JPEG without scan data must return None"
+        );
+    }
+
+    #[test]
+    fn decode_image_for_v2_gif_valid_returns_some() {
+        let entry = make_test_image_entry(TEST_GIF_1X1, crate::image::ImageFormat::Gif, true);
+        assert!(
+            decode_image_for_v2(&entry).is_some(),
+            "valid GIF should decode"
+        );
+    }
+
+    #[test]
+    fn decode_image_for_v2_invalid_data_returns_none() {
+        let entry =
+            make_test_image_entry(b"not a real image", crate::image::ImageFormat::Png, true);
+        assert!(
+            decode_image_for_v2(&entry).is_none(),
+            "corrupt data should yield None"
+        );
+    }
+
+    // ─── draw_image_inner_paint smoke tests ───────────────────────────────
+
+    #[test]
+    fn draw_image_inner_paint_invisible_is_noop() {
+        let entry = make_test_image_entry(TEST_PNG_1X1, crate::image::ImageFormat::Png, false);
+        with_canvas_smoke(|canvas| {
+            draw_image_inner_paint(canvas, &entry, 0.0, 0.0);
+        });
+    }
+
+    #[test]
+    fn draw_image_inner_paint_invalid_data_skips_draw() {
+        let entry = make_test_image_entry(b"bad data", crate::image::ImageFormat::Png, true);
+        with_canvas_smoke(|canvas| {
+            draw_image_inner_paint(canvas, &entry, 0.0, 0.0);
+        });
+    }
+
+    #[test]
+    fn draw_image_inner_paint_valid_png_smoke() {
+        let entry = make_test_image_entry(TEST_PNG_1X1, crate::image::ImageFormat::Png, true);
+        with_canvas_smoke(|canvas| {
+            draw_image_inner_paint(canvas, &entry, 5.0, 10.0);
+        });
+    }
+
+    #[test]
+    fn draw_image_v2_valid_png_smoke() {
+        let entry = make_test_image_entry(TEST_PNG_1X1, crate::image::ImageFormat::Png, true);
+        with_canvas_smoke(|canvas| {
+            draw_image_v2(canvas, &entry, 0.0, 0.0);
+        });
+    }
+
+    // ─── draw_block_inner_paint / draw_block_v2 smoke tests ──────────────
+
+    fn make_block_entry_for_draw(
+        width: f32,
+        height: f32,
+        visible: bool,
+        layout_size: Option<crate::draw_primitives::Size>,
+    ) -> crate::drawables::BlockEntry {
+        crate::drawables::BlockEntry {
+            style: crate::draw_primitives::BlockStyle::default(),
+            opacity: 1.0,
+            visible,
+            id: None,
+            layout_size,
+            clip_descendants: vec![],
+            opacity_descendants: vec![],
+        }
+    }
+
+    fn make_frag_for_draw(width: f32, height: f32) -> crate::pagination_layout::Fragment {
+        crate::pagination_layout::Fragment {
+            page_index: 0,
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn draw_block_inner_paint_not_split_uses_layout_size_height() {
+        // is_split=false → layout_size.height is used for the paint rect,
+        // covering the `if is_split && frag.height > 0.0 { ... } else { s.height }` else arm.
+        let entry = make_block_entry_for_draw(
+            80.0,
+            60.0,
+            true,
+            Some(crate::draw_primitives::Size {
+                width: 80.0,
+                height: 60.0,
+            }),
+        );
+        let frag = make_frag_for_draw(100.0, 40.0);
+        with_canvas_smoke(|canvas| {
+            draw_block_inner_paint(canvas, &entry, 0.0, 0.0, &frag, false);
+        });
+    }
+
+    #[test]
+    fn draw_block_inner_paint_split_uses_frag_height() {
+        // is_split=true, frag.height > 0 → px_to_pt(frag.height) used for total_height.
+        let entry = make_block_entry_for_draw(
+            80.0,
+            120.0,
+            true,
+            Some(crate::draw_primitives::Size {
+                width: 80.0,
+                height: 120.0,
+            }),
+        );
+        let frag = make_frag_for_draw(100.0, 40.0);
+        with_canvas_smoke(|canvas| {
+            draw_block_inner_paint(canvas, &entry, 0.0, 0.0, &frag, true);
+        });
+    }
+
+    #[test]
+    fn draw_block_inner_paint_split_zero_frag_height_falls_back_to_layout_height() {
+        // is_split=true but frag.height == 0.0 → `frag.height > 0.0` is false
+        // → layout_size.height used (same else arm as not-split, different condition).
+        let entry = make_block_entry_for_draw(
+            80.0,
+            60.0,
+            true,
+            Some(crate::draw_primitives::Size {
+                width: 80.0,
+                height: 60.0,
+            }),
+        );
+        let frag = make_frag_for_draw(100.0, 0.0);
+        with_canvas_smoke(|canvas| {
+            draw_block_inner_paint(canvas, &entry, 0.0, 0.0, &frag, true);
+        });
+    }
+
+    #[test]
+    fn draw_block_inner_paint_no_layout_size_uses_frag_dimensions() {
+        // layout_size=None → both width and height fall back to px_to_pt(frag.*).
+        let entry = make_block_entry_for_draw(0.0, 0.0, true, None);
+        let frag = make_frag_for_draw(100.0, 50.0);
+        with_canvas_smoke(|canvas| {
+            draw_block_inner_paint(canvas, &entry, 0.0, 0.0, &frag, false);
+        });
+    }
+
+    #[test]
+    fn draw_block_inner_paint_invisible_skips_paint_calls() {
+        // visible=false → the `if entry.visible { ... }` block is skipped.
+        let entry = make_block_entry_for_draw(
+            80.0,
+            60.0,
+            false,
+            Some(crate::draw_primitives::Size {
+                width: 80.0,
+                height: 60.0,
+            }),
+        );
+        let frag = make_frag_for_draw(100.0, 40.0);
+        with_canvas_smoke(|canvas| {
+            draw_block_inner_paint(canvas, &entry, 0.0, 0.0, &frag, false);
+        });
+    }
+
+    #[test]
+    fn draw_block_v2_smoke() {
+        let entry = make_block_entry_for_draw(
+            80.0,
+            60.0,
+            true,
+            Some(crate::draw_primitives::Size {
+                width: 80.0,
+                height: 60.0,
+            }),
+        );
+        let frag = make_frag_for_draw(100.0, 50.0);
+        with_canvas_smoke(|canvas| {
+            draw_block_v2(canvas, &entry, 0.0, 0.0, &frag, false);
+        });
+    }
+
+    // ─── paint_root_block_v2 smoke tests ─────────────────────────────────
+
+    #[test]
+    fn paint_root_block_v2_no_layout_size_is_noop() {
+        // layout_size=None → `let Some(size) = entry.layout_size else { return; }` fires.
+        let entry = make_block_entry_for_draw(0.0, 0.0, true, None);
+        with_canvas_smoke(|canvas| {
+            paint_root_block_v2(canvas, &entry, 0.0, 0.0, None);
+        });
+    }
+
+    #[test]
+    fn paint_root_block_v2_with_layout_size_smoke() {
+        let entry = make_block_entry_for_draw(
+            100.0,
+            80.0,
+            true,
+            Some(crate::draw_primitives::Size {
+                width: 100.0,
+                height: 80.0,
+            }),
+        );
+        with_canvas_smoke(|canvas| {
+            paint_root_block_v2(canvas, &entry, 10.0, 10.0, None);
+        });
+    }
+
+    #[test]
+    fn paint_root_block_v2_height_override_smoke() {
+        // height_override=Some(h) → `h` used instead of layout_size.height.
+        let entry = make_block_entry_for_draw(
+            100.0,
+            80.0,
+            true,
+            Some(crate::draw_primitives::Size {
+                width: 100.0,
+                height: 80.0,
+            }),
+        );
+        with_canvas_smoke(|canvas| {
+            paint_root_block_v2(canvas, &entry, 0.0, 0.0, Some(50.0));
+        });
+    }
+
+    #[test]
+    fn paint_root_block_v2_invisible_skips_inner_paint() {
+        // visible=false → `if entry.visible { ... }` inside draw_with_opacity is skipped.
+        let entry = make_block_entry_for_draw(
+            100.0,
+            80.0,
+            false,
+            Some(crate::draw_primitives::Size {
+                width: 100.0,
+                height: 80.0,
+            }),
+        );
+        with_canvas_smoke(|canvas| {
+            paint_root_block_v2(canvas, &entry, 0.0, 0.0, None);
+        });
+    }
+
+    // ─── draw_table_v2 smoke tests ────────────────────────────────────────
+
+    fn make_table_entry_for_draw(
+        visible: bool,
+        layout_size: Option<crate::draw_primitives::Size>,
+    ) -> crate::drawables::TableEntry {
+        crate::drawables::TableEntry {
+            style: crate::draw_primitives::BlockStyle::default(),
+            opacity: 1.0,
+            visible,
+            id: None,
+            layout_size,
+            width: 80.0,
+            cached_height: 60.0,
+            clip_descendants: vec![],
+        }
+    }
+
+    #[test]
+    fn draw_table_v2_visible_smoke() {
+        let entry = make_table_entry_for_draw(
+            true,
+            Some(crate::draw_primitives::Size {
+                width: 80.0,
+                height: 60.0,
+            }),
+        );
+        let frag = make_frag_for_draw(100.0, 60.0);
+        with_canvas_smoke(|canvas| {
+            draw_table_v2(canvas, &entry, 0.0, 0.0, &frag);
+        });
+    }
+
+    #[test]
+    fn draw_table_v2_invisible_skips_paint() {
+        // visible=false → paint_table_outer_frame is not called.
+        let entry = make_table_entry_for_draw(
+            false,
+            Some(crate::draw_primitives::Size {
+                width: 80.0,
+                height: 60.0,
+            }),
+        );
+        let frag = make_frag_for_draw(100.0, 60.0);
+        with_canvas_smoke(|canvas| {
+            draw_table_v2(canvas, &entry, 0.0, 0.0, &frag);
+        });
+    }
+
+    // ─── build_struct_tree: remaining untested branches ──────────────────
+
+    #[test]
+    fn build_struct_tree_run_entry_p_tag_skips_title_backfill() {
+        // A P-tagged node in run_entries: `matches!(entry.tag, H { .. })` is false
+        // → the heading_title backfill block is skipped entirely.
+        let node_id: usize = 50;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(id),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_p_semantic_entry(None));
+        let text_line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "paragraph text",
+            None,
+        ))]);
+        d.paragraphs.insert(node_id, make_para(vec![text_line]));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "P semantic → one root Group");
+    }
+
+    #[test]
+    fn build_struct_tree_run_entry_heading_already_in_titles_uses_continue() {
+        // A node appears in both tc.record (which seeds heading_titles) and
+        // tc.record_run (which puts it in run_entries). The backfill loop's
+        // `if heading_titles.contains_key(&node_id)` guard fires → `continue`.
+        let node_id: usize = 61;
+        let tc_id = make_identifier();
+        let run_id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record(
+            node_id,
+            crate::tagging::PdfTag::H { level: 1 },
+            tc_id,
+            Some("Seeded title".to_string()),
+        );
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(run_id),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_h1_semantic_entry(None));
+        let text_line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "Should not overwrite",
+            None,
+        ))]);
+        d.paragraphs.insert(node_id, make_para(vec![text_line]));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "H semantic → one root Group");
+    }
+
+    // ─── build_tag_group: additional branch coverage ──────────────────────
+
+    #[test]
+    fn build_tag_group_multiple_consecutive_same_ptr_link_contents_grouped() {
+        // Two consecutive LinkContent items sharing span_ptr=42 must be collected
+        // into one Link TagGroup by the inner while loop iterating twice.
+        let node_id: crate::drawables::NodeId = 70;
+        let link_id1 = make_identifier();
+        let link_id2 = make_identifier();
+
+        let mut run_entries: BTreeMap<
+            crate::drawables::NodeId,
+            Vec<crate::draw_primitives::ParagraphRunItem>,
+        > = BTreeMap::new();
+        run_entries.insert(
+            node_id,
+            vec![
+                crate::draw_primitives::ParagraphRunItem::LinkContent {
+                    span_ptr: 42,
+                    identifier: link_id1,
+                },
+                crate::draw_primitives::ParagraphRunItem::LinkContent {
+                    span_ptr: 42,
+                    identifier: link_id2,
+                },
+            ],
+        );
+
+        let drawables = drawables_with_para(node_id);
+        let identifiers: BTreeMap<crate::drawables::NodeId, Vec<Identifier>> = BTreeMap::new();
+        let heading_titles: BTreeMap<crate::drawables::NodeId, String> = BTreeMap::new();
+        let children_map: BTreeMap<crate::drawables::NodeId, Vec<crate::drawables::NodeId>> =
+            BTreeMap::new();
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+
+        let group = build_tag_group(
+            node_id,
+            &drawables,
+            &identifiers,
+            &heading_titles,
+            &children_map,
+            &run_entries,
+            &link_annot_ids,
+        );
+
+        assert_eq!(
+            group.children.len(),
+            1,
+            "two same-ptr items → one Link Group"
+        );
+        assert!(matches!(group.children[0], Node::Group(_)));
+        if let Node::Group(link_group) = &group.children[0] {
+            assert_eq!(
+                link_group.children.len(),
+                2,
+                "both identifiers must be leaves inside the single Link Group"
+            );
+            assert!(matches!(link_group.children[0], Node::Leaf(_)));
+            assert!(matches!(link_group.children[1], Node::Leaf(_)));
+        }
+    }
+
+    #[test]
+    fn build_tag_group_identifiers_multiple_per_node_produces_multiple_leaves() {
+        // A cross-page paragraph registers two identifiers for the same node.
+        // The `else if let Some(ids) = identifiers.get(&node_id)` branch must
+        // push one Leaf per identifier.
+        let node_id: crate::drawables::NodeId = 71;
+        let id1 = make_identifier();
+        let id2 = make_identifier();
+
+        let mut identifiers: BTreeMap<crate::drawables::NodeId, Vec<Identifier>> = BTreeMap::new();
+        identifiers.insert(node_id, vec![id1, id2]);
+
+        let drawables = drawables_with_para(node_id);
+        let heading_titles: BTreeMap<crate::drawables::NodeId, String> = BTreeMap::new();
+        let children_map: BTreeMap<crate::drawables::NodeId, Vec<crate::drawables::NodeId>> =
+            BTreeMap::new();
+        let run_entries: BTreeMap<
+            crate::drawables::NodeId,
+            Vec<crate::draw_primitives::ParagraphRunItem>,
+        > = BTreeMap::new();
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+
+        let group = build_tag_group(
+            node_id,
+            &drawables,
+            &identifiers,
+            &heading_titles,
+            &children_map,
+            &run_entries,
+            &link_annot_ids,
+        );
+
+        assert_eq!(group.children.len(), 2, "two identifiers → two Leaf nodes");
+        assert!(matches!(group.children[0], Node::Leaf(_)));
+        assert!(matches!(group.children[1], Node::Leaf(_)));
+    }
+
+    #[test]
+    fn build_tag_group_with_alt_text_in_semantics() {
+        // SemanticEntry with alt_text=Some(...) passes alt_text to
+        // pdf_tag_to_krilla_tag. Structure should remain a single root Group.
+        let node_id: crate::drawables::NodeId = 72;
+        let id = make_identifier();
+
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record(node_id, crate::tagging::PdfTag::P, id, None);
+        let mut d = Drawables::new();
+        d.semantics.insert(
+            node_id,
+            crate::tagging::SemanticEntry {
+                tag: crate::tagging::PdfTag::P,
+                parent: None,
+                alt_text: Some("alternative text".to_string()),
+            },
+        );
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "P with alt_text → one root Group");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
 }
