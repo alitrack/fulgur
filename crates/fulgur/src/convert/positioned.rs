@@ -457,3 +457,274 @@ pub(super) fn try_build_absolute_pseudo_image(
 
 // `effective_pseudo_size_px` is no longer used — abs/fixed inset
 // resolution math moves to the render path in a follow-up.
+
+#[cfg(test)]
+mod tests {
+    use blitz_html::HtmlDocument;
+    use std::ops::{Deref, DerefMut};
+
+    use super::*;
+
+    // ── helpers ──────────────────────────────────────────────────────
+
+    fn parse_doc(html: &str) -> HtmlDocument {
+        crate::blitz_adapter::parse_and_layout(html, 595.0, 842.0, &[], false)
+    }
+
+    fn find_first_by_tag(doc: &BaseDocument, start_id: usize, tag: &str) -> Option<usize> {
+        let node = doc.get_node(start_id)?;
+        if node
+            .element_data()
+            .is_some_and(|e| e.name.local.as_ref() == tag)
+        {
+            return Some(start_id);
+        }
+        for &c in &node.children {
+            if let Some(found) = find_first_by_tag(doc, c, tag) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    fn find_tag(doc: &HtmlDocument, tag: &str) -> usize {
+        let root = doc.root_element();
+        find_first_by_tag(doc.deref(), root.id, tag)
+            .unwrap_or_else(|| panic!("<{tag}> not found in document"))
+    }
+
+    // 'store is the lifetime of running_store, which ConvertContext<'store>
+    // borrows. doc's lifetime is not stored and can be elided.
+    fn make_ctx<'store>(
+        doc: &mut HtmlDocument,
+        running_store: &'store RunningElementStore,
+    ) -> ConvertContext<'store> {
+        let column_styles = crate::blitz_adapter::extract_column_style_table(doc);
+        let multicol_geometry = crate::multicol_layout::run_pass(doc.deref_mut(), &column_styles);
+        let pagination_geometry = crate::pagination_layout::run_pass(doc.deref_mut(), 842.0);
+        ConvertContext {
+            running_store,
+            assets: None,
+            font_cache: Default::default(),
+            string_set_by_node: Default::default(),
+            counter_ops_by_node: Default::default(),
+            bookmark_by_node: Default::default(),
+            column_styles,
+            multicol_geometry,
+            pagination_geometry,
+            link_cache: Default::default(),
+            viewport_size_px: Some((595.0, 842.0)),
+        }
+    }
+
+    // ── is_absolutely_positioned ──────────────────────────────────────
+
+    #[test]
+    fn is_absolutely_positioned_true_for_absolute() {
+        let doc = parse_doc(
+            r#"<!doctype html><html><body><div style="position:absolute">x</div></body></html>"#,
+        );
+        let node = doc.get_node(find_tag(&doc, "div")).unwrap();
+        assert!(is_absolutely_positioned(node));
+    }
+
+    #[test]
+    fn is_absolutely_positioned_true_for_fixed() {
+        let doc = parse_doc(
+            r#"<!doctype html><html><body><div style="position:fixed">x</div></body></html>"#,
+        );
+        let node = doc.get_node(find_tag(&doc, "div")).unwrap();
+        assert!(is_absolutely_positioned(node));
+    }
+
+    #[test]
+    fn is_absolutely_positioned_false_for_default() {
+        let doc = parse_doc(r#"<!doctype html><html><body><div>x</div></body></html>"#);
+        let node = doc.get_node(find_tag(&doc, "div")).unwrap();
+        assert!(!is_absolutely_positioned(node));
+    }
+
+    #[test]
+    fn is_absolutely_positioned_false_for_relative() {
+        let doc = parse_doc(
+            r#"<!doctype html><html><body><div style="position:relative">x</div></body></html>"#,
+        );
+        let node = doc.get_node(find_tag(&doc, "div")).unwrap();
+        assert!(!is_absolutely_positioned(node));
+    }
+
+    // ── is_position_fixed ────────────────────────────────────────────
+
+    #[test]
+    fn is_position_fixed_true_for_fixed() {
+        let doc = parse_doc(
+            r#"<!doctype html><html><body><div style="position:fixed">x</div></body></html>"#,
+        );
+        let node = doc.get_node(find_tag(&doc, "div")).unwrap();
+        assert!(is_position_fixed(node));
+    }
+
+    #[test]
+    fn is_position_fixed_false_for_absolute() {
+        let doc = parse_doc(
+            r#"<!doctype html><html><body><div style="position:absolute">x</div></body></html>"#,
+        );
+        let node = doc.get_node(find_tag(&doc, "div")).unwrap();
+        assert!(!is_position_fixed(node));
+    }
+
+    #[test]
+    fn is_position_fixed_false_for_default() {
+        let doc = parse_doc(r#"<!doctype html><html><body><div>x</div></body></html>"#);
+        let node = doc.get_node(find_tag(&doc, "div")).unwrap();
+        assert!(!is_position_fixed(node));
+    }
+
+    // ── is_position_static ───────────────────────────────────────────
+
+    #[test]
+    fn is_position_static_true_for_default() {
+        let doc = parse_doc(r#"<!doctype html><html><body><div>x</div></body></html>"#);
+        let node = doc.get_node(find_tag(&doc, "div")).unwrap();
+        assert!(is_position_static(node));
+    }
+
+    #[test]
+    fn is_position_static_false_for_absolute() {
+        let doc = parse_doc(
+            r#"<!doctype html><html><body><div style="position:absolute">x</div></body></html>"#,
+        );
+        let node = doc.get_node(find_tag(&doc, "div")).unwrap();
+        assert!(!is_position_static(node));
+    }
+
+    #[test]
+    fn is_position_static_false_for_relative() {
+        let doc = parse_doc(
+            r#"<!doctype html><html><body><div style="position:relative">x</div></body></html>"#,
+        );
+        let node = doc.get_node(find_tag(&doc, "div")).unwrap();
+        assert!(!is_position_static(node));
+    }
+
+    // ── try_build_absolute_pseudo_image ──────────────────────────────
+
+    #[test]
+    fn try_build_absolute_pseudo_image_returns_none_without_content_url() {
+        let doc = parse_doc(
+            r#"<!doctype html><html><body><div style="position:absolute">x</div></body></html>"#,
+        );
+        let div_id = find_tag(&doc, "div");
+        let node = doc.get_node(div_id).unwrap();
+        // A regular element with no `content: url(...)` must return None.
+        assert!(try_build_absolute_pseudo_image(node, node, None, None).is_none());
+    }
+
+    // ── walk_absolute_non_pseudo_children ────────────────────────────
+
+    #[test]
+    fn walk_absolute_non_pseudo_children_registers_abs_child_block_entry() {
+        // Container with one abs-positioned child (with text content so
+        // block::convert uses the container path, which always inserts a
+        // BlockEntry) and one static child.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section>
+                <div style="position:absolute;width:10px;height:10px;">abs</div>
+                <div>static</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_id = find_tag(&doc, "section");
+        let section_node = doc.get_node(section_id).unwrap();
+
+        walk_absolute_non_pseudo_children(doc.deref(), section_node, &mut ctx, 0, &mut out);
+
+        // The abs-positioned div with text is an inline root, so it produces
+        // a ParagraphEntry rather than a BlockEntry. Either is proof of
+        // conversion.
+        assert!(
+            !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
+            "expected abs child to produce a draw entry"
+        );
+    }
+
+    #[test]
+    fn walk_absolute_non_pseudo_children_skips_static_children() {
+        // Container with only static children: nothing should be registered.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section>
+                <div>first</div>
+                <div>second</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_id = find_tag(&doc, "section");
+        let section_node = doc.get_node(section_id).unwrap();
+
+        walk_absolute_non_pseudo_children(doc.deref(), section_node, &mut ctx, 0, &mut out);
+
+        assert!(
+            out.block_styles.is_empty() && out.paragraphs.is_empty(),
+            "static children must not be registered by walk_absolute_non_pseudo_children"
+        );
+    }
+
+    // ── walk_children_into_drawables ────────────────────────────────
+
+    #[test]
+    fn walk_children_into_drawables_excludes_abs_positioned_children() {
+        // Parent with one abs child and one static child. The abs child must
+        // NOT be registered by walk_children_into_drawables (it's handled by
+        // walk_absolute_pseudo_children instead).
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section>
+                <div style="position:absolute;width:5px;height:5px;"></div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_id = find_tag(&doc, "section");
+        // Snapshot the children while we still hold the node ref, before
+        // borrowing doc as immutable for walk_children_into_drawables.
+        let child_ids: Vec<usize> = doc
+            .get_node(section_id)
+            .map(|n| n.children.clone())
+            .unwrap_or_default();
+
+        walk_children_into_drawables(doc.deref(), &child_ids, &mut ctx, 0, &mut out);
+
+        // The abs-positioned div must NOT appear — it is filtered out.
+        // The drawables should have no block entry for the abs child.
+        let abs_div_id = find_tag(&doc, "div");
+        assert!(
+            !out.block_styles.contains_key(&abs_div_id),
+            "abs child must be excluded by walk_children_into_drawables"
+        );
+    }
+}
