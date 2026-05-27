@@ -74,7 +74,6 @@ pub struct ShapedGlyph {
     pub text_range: std::ops::Range<usize>,
 }
 
-
 /// Target for a clickable link in PDF output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkTarget {

@@ -3996,14 +3996,28 @@ fn cluster_strings(run: &fulgur::paragraph::ShapedGlyphRun) -> Vec<String> {
     let mut prev: Option<std::ops::Range<usize>> = None;
     for (gi, glyph) in run.glyphs.iter().enumerate() {
         let r = &glyph.text_range;
-        assert!(r.end <= text.len(),
-            "glyph {gi}: range end {} > text.len() {} in {text:?}", r.end, text.len());
-        assert!(r.start < r.end,
-            "glyph {gi}: empty range {}..{} in {text:?}", r.start, r.end);
-        assert!(text.is_char_boundary(r.start),
-            "glyph {gi}: start {} splits a UTF-8 char in {text:?}", r.start);
-        assert!(text.is_char_boundary(r.end),
-            "glyph {gi}: end {} splits a UTF-8 char in {text:?}", r.end);
+        assert!(
+            r.end <= text.len(),
+            "glyph {gi}: range end {} > text.len() {} in {text:?}",
+            r.end,
+            text.len()
+        );
+        assert!(
+            r.start < r.end,
+            "glyph {gi}: empty range {}..{} in {text:?}",
+            r.start,
+            r.end
+        );
+        assert!(
+            text.is_char_boundary(r.start),
+            "glyph {gi}: start {} splits a UTF-8 char in {text:?}",
+            r.start
+        );
+        assert!(
+            text.is_char_boundary(r.end),
+            "glyph {gi}: end {} splits a UTF-8 char in {text:?}",
+            r.end
+        );
         if prev.as_ref() != Some(r) {
             out.push(text[r.clone()].to_string());
             prev = Some(r.clone());
@@ -4037,7 +4051,9 @@ fn selecting_first_word_copies_only_first_word() {
     let d = noto_engine()
         .build_drawables_for_testing_no_gcpm("<html><body><p>Hello World</p></body></html>");
     let runs = collect_text_runs(&d);
-    let run = runs.iter().find(|r| r.text.contains("Hello World"))
+    let run = runs
+        .iter()
+        .find(|r| r.text.contains("Hello World"))
         .expect("no run containing 'Hello World'");
     assert_selection(run, 0..5, "Hello");
     assert_selection(run, 6..11, "World");
@@ -4050,7 +4066,9 @@ fn each_ascii_glyph_copies_its_own_character() {
     let d = noto_engine()
         .build_drawables_for_testing_no_gcpm("<html><body><p>Hello World</p></body></html>");
     let runs = collect_text_runs(&d);
-    let run = runs.iter().find(|r| r.text.contains("Hello World"))
+    let run = runs
+        .iter()
+        .find(|r| r.text.contains("Hello World"))
         .expect("no run containing 'Hello World'");
     let expected_chars: Vec<char> = "Hello World".chars().collect();
     for (gi, glyph) in run.glyphs.iter().enumerate() {
@@ -4075,9 +4093,8 @@ fn each_multibyte_glyph_copies_its_own_character() {
     // full paragraph string for every run — searching by text.contains() would
     // match any run in the paragraph and might miss characters covered by a
     // later run (e.g. if a font fallback splits the paragraph mid-way).
-    let d = noto_engine().build_drawables_for_testing_no_gcpm(
-        "<html><body><p>café €42</p></body></html>",
-    );
+    let d = noto_engine()
+        .build_drawables_for_testing_no_gcpm("<html><body><p>café €42</p></body></html>");
     let all_clusters: Vec<String> = collect_text_runs(&d)
         .iter()
         .flat_map(|r| cluster_strings(r))
@@ -4091,14 +4108,17 @@ fn each_line_in_multiline_paragraph_copies_only_its_own_text() {
     // glyphs must not bleed into each other's text.
     // Old bug: every glyph has range 0..len("First\nSecond"), so copying
     // any run yields the entire string instead of just that line.
-    let d = noto_engine().build_drawables_for_testing_no_gcpm(
-        "<html><body><p>First<br>Second</p></body></html>",
-    );
+    let d = noto_engine()
+        .build_drawables_for_testing_no_gcpm("<html><body><p>First<br>Second</p></body></html>");
     let copied: Vec<String> = collect_text_runs(&d).iter().map(copy_run).collect();
-    assert!(copied.contains(&"First".to_string()),
-        "no run copies exactly 'First'; got {copied:?}");
-    assert!(copied.contains(&"Second".to_string()),
-        "no run copies exactly 'Second'; got {copied:?}");
+    assert!(
+        copied.contains(&"First".to_string()),
+        "no run copies exactly 'First'; got {copied:?}"
+    );
+    assert!(
+        copied.contains(&"Second".to_string()),
+        "no run copies exactly 'Second'; got {copied:?}"
+    );
 }
 
 #[test]
@@ -4109,8 +4129,10 @@ fn bold_span_copies_only_bold_text() {
         "<html><body><p>Normal <strong>bold</strong> text</p></body></html>",
     );
     let copied: Vec<String> = collect_text_runs(&d).iter().map(copy_run).collect();
-    assert!(copied.contains(&"bold".to_string()),
-        "no run copies exactly 'bold'; got {copied:?}");
+    assert!(
+        copied.contains(&"bold".to_string()),
+        "no run copies exactly 'bold'; got {copied:?}"
+    );
 }
 
 #[test]
@@ -4119,13 +4141,14 @@ fn list_marker_copies_correct_text() {
     // The body text "item" must decode one character per cluster.
     // Old bug: all glyphs claim 0..4, cluster_strings returns ["item"] not
     // ["i","t","e","m"].
-    let d = noto_engine().build_drawables_for_testing_no_gcpm(
-        "<html><body><ul><li>item</li></ul></body></html>",
-    );
+    let d = noto_engine()
+        .build_drawables_for_testing_no_gcpm("<html><body><ul><li>item</li></ul></body></html>");
     // Find the run that actually covers "item" by checking what it decodes to,
     // not by run.text (which is the full paragraph string for every run).
     let runs = collect_text_runs(&d);
-    let run = runs.iter().find(|r| copy_run(r) == "item")
+    let run = runs
+        .iter()
+        .find(|r| copy_run(r) == "item")
         .expect("no run that copies exactly 'item'");
     assert_eq!(cluster_strings(run), vec!["i", "t", "e", "m"]);
 }
@@ -4146,9 +4169,7 @@ fn cjk_glyphs_copy_correct_characters() {
     assets.add_font_file(&jp_path).expect("NotoSansJP");
     assets.add_css("body { font-family: 'Noto Sans JP', 'Noto Sans', sans-serif; }");
     let engine = Engine::builder().assets(assets).build();
-    let d = engine.build_drawables_for_testing_no_gcpm(
-        "<html><body><p>你好世界</p></body></html>",
-    );
+    let d = engine.build_drawables_for_testing_no_gcpm("<html><body><p>你好世界</p></body></html>");
     let all_clusters: Vec<String> = collect_text_runs(&d)
         .iter()
         .flat_map(|r| cluster_strings(r))
