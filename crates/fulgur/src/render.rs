@@ -5199,4 +5199,131 @@ mod tests {
         let (_, clip, _) = build_page_skip_sets(&d);
         assert!(clip.is_empty(), "empty clip_descendants → nothing added");
     }
+
+    // --- build_multicol_stroke ---
+
+    fn rule_spec(
+        width: f32,
+        style: crate::column_css::ColumnRuleStyle,
+    ) -> crate::column_css::ColumnRuleSpec {
+        crate::column_css::ColumnRuleSpec {
+            width,
+            style,
+            color: [0, 0, 0, 255],
+        }
+    }
+
+    #[test]
+    fn build_multicol_stroke_none_style_returns_none() {
+        let rule = rule_spec(2.0, crate::column_css::ColumnRuleStyle::None);
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_zero_width_returns_none() {
+        let rule = rule_spec(0.0, crate::column_css::ColumnRuleStyle::Solid);
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_negative_width_returns_none() {
+        let rule = rule_spec(-1.0, crate::column_css::ColumnRuleStyle::Solid);
+        assert!(build_multicol_stroke(&rule).is_none());
+    }
+
+    #[test]
+    fn build_multicol_stroke_solid_returns_some_without_dash() {
+        let rule = rule_spec(3.0, crate::column_css::ColumnRuleStyle::Solid);
+        let stroke = build_multicol_stroke(&rule).expect("solid rule should return Some");
+        assert!(stroke.dash.is_none(), "solid rule should have no dash");
+        assert_eq!(
+            stroke.line_cap,
+            krilla::paint::LineCap::Butt,
+            "solid default cap is Butt"
+        );
+        assert!(
+            (stroke.width - 3.0).abs() < 0.001,
+            "width should match rule.width"
+        );
+    }
+
+    #[test]
+    fn build_multicol_stroke_dashed_has_expected_dash_array() {
+        let w = 4.0_f32;
+        let rule = rule_spec(w, crate::column_css::ColumnRuleStyle::Dashed);
+        let stroke = build_multicol_stroke(&rule).expect("dashed rule should return Some");
+        let dash = stroke.dash.expect("dashed rule should have a dash");
+        assert_eq!(dash.array, vec![w * 3.0, w * 2.0], "dash array is [3w, 2w]");
+        assert!((dash.offset - 0.0).abs() < 0.001, "dash offset should be 0");
+    }
+
+    #[test]
+    fn build_multicol_stroke_dotted_has_round_cap_and_expected_dash_array() {
+        let w = 2.0_f32;
+        let rule = rule_spec(w, crate::column_css::ColumnRuleStyle::Dotted);
+        let stroke = build_multicol_stroke(&rule).expect("dotted rule should return Some");
+        assert_eq!(
+            stroke.line_cap,
+            krilla::paint::LineCap::Round,
+            "dotted cap is Round"
+        );
+        let dash = stroke.dash.expect("dotted rule should have a dash");
+        assert_eq!(dash.array, vec![0.0, w * 2.0], "dash array is [0, 2w]");
+        assert!((dash.offset - 0.0).abs() < 0.001, "dash offset should be 0");
+    }
+
+    // --- build_struct_tree: missing branches ---
+
+    #[test]
+    fn build_struct_tree_run_entry_p_tag_skips_heading_backfill() {
+        // A node in run_entries with PdfTag::P (not H).
+        // The backfill loop's `if matches!(entry.tag, PdfTag::H { .. })` is false → skip.
+        // The tree should still build correctly via build_tag_group's run_entries branch.
+        let node_id: usize = 50;
+        let id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(id),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_p_semantic_entry(None));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "one root Group");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
+
+    #[test]
+    fn build_struct_tree_run_entry_h_already_in_heading_titles_continues() {
+        // A node appears in both tc_entries (populating heading_titles) AND run_entries.
+        // The backfill loop's `if heading_titles.contains_key(&node_id) { continue; }` fires.
+        let node_id: usize = 60;
+        let tc_id = make_identifier();
+        let run_id = make_identifier();
+        let mut tc = crate::draw_primitives::TagCollector::new();
+        tc.record(
+            node_id,
+            crate::tagging::PdfTag::H { level: 1 },
+            tc_id,
+            Some("Pre-existing title".to_string()),
+        );
+        tc.record_run(
+            node_id,
+            crate::draw_primitives::ParagraphRunItem::Content(run_id),
+        );
+        let mut d = Drawables::new();
+        d.semantics.insert(node_id, make_h1_semantic_entry(None));
+        let text_line = make_shaped_line(vec![crate::paragraph::LineItem::Text(make_glyph_run(
+            "Different title",
+            None,
+        ))]);
+        d.paragraphs.insert(node_id, make_para(vec![text_line]));
+        let link_annot_ids: BTreeMap<usize, Vec<Identifier>> = BTreeMap::new();
+        let mut tree = TagTree::new();
+        build_struct_tree(tc, &d, &link_annot_ids, &mut tree);
+        assert_eq!(tree.children.len(), 1, "one root Group");
+        assert!(matches!(tree.children[0], Node::Group(_)));
+    }
 }
