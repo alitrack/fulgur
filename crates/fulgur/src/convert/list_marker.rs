@@ -184,6 +184,8 @@ pub(super) fn extract_marker_lines(
         }
         let mut items = Vec::new();
         let mut line_width: f32 = 0.0;
+        let mut prev_run_key = usize::MAX;
+        let mut run_glyph_offset = 0usize;
 
         for item in line.items() {
             if let parley::PositionedLayoutItem::GlyphRun(glyph_run) = item {
@@ -201,18 +203,32 @@ pub(super) fn extract_marker_lines(
                 let brush = &glyph_run.style().brush;
                 let color = get_text_color(doc, brush.id);
 
+                let run_key = run.cluster_range().start;
+                if run_key != prev_run_key {
+                    prev_run_key = run_key;
+                    run_glyph_offset = 0;
+                }
+                let glyph_start = run_glyph_offset;
+
+                let mut annotated = run
+                    .visual_clusters()
+                    .flat_map(|cluster| {
+                        let r = cluster.text_range();
+                        cluster.glyphs().map(move |g| (r.clone(), g))
+                    })
+                    .skip(glyph_start);
+
                 let mut glyphs = Vec::new();
-                let run = glyph_run.run();
-                for cluster in run.visual_clusters() {
-                    let text_range = cluster.text_range();
-                    for g in cluster.glyphs() {
+                for g in glyph_run.glyphs() {
+                    if let Some((text_range, _)) = annotated.next() {
+                        run_glyph_offset += 1;
                         line_width += px_to_pt(g.advance);
                         glyphs.push(ShapedGlyph {
                             id: g.id,
                             x_advance: g.advance / font_size_parley,
                             x_offset: g.x / font_size_parley,
                             y_offset: g.y / font_size_parley,
-                            text_range: text_range.clone(),
+                            text_range,
                         });
                     }
                 }

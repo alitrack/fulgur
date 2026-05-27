@@ -4155,3 +4155,53 @@ fn cjk_glyphs_copy_correct_characters() {
         .collect();
     assert_eq!(all_clusters, vec!["你", "好", "世", "界"]);
 }
+
+/// Regression for the multi-GlyphRun duplication bug: when a single Parley
+/// `Run` is split across multiple `GlyphRun`s (as `counters(item, ".")` list
+/// markers produce — one GlyphRun for "1." and another for "Alpha"), iterating
+/// `glyph_run.run().visual_clusters()` emits ALL clusters of the parent Run for
+/// EACH GlyphRun, causing each glyph to appear once per GlyphRun rather than
+/// once total.
+///
+/// The correct output is "1.Alpha" exactly once per list item. The buggy output
+/// renders "1.Alpha" twice — overlapping at slightly different x positions —
+/// which pdftotext extracts as two occurrences.
+#[test]
+fn multi_glyph_run_marker_renders_without_duplication() {
+    let html = r#"<!doctype html>
+<html>
+<head><style>
+ol { counter-reset: item; padding: 0; margin: 0; list-style: none; }
+li { counter-increment: item; }
+li::before { content: counters(item, ".") ". "; }
+body { font-family: 'Noto Sans', sans-serif; }
+</style></head>
+<body>
+<ol>
+  <li>Alpha</li>
+  <li>Beta
+    <ol>
+      <li>Beta-one</li>
+      <li>Beta-two</li>
+    </ol>
+  </li>
+  <li>Gamma</li>
+</ol>
+</body>
+</html>"#;
+
+    let pdf = noto_engine().render_html(html).expect("render");
+    assert!(!pdf.is_empty());
+
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping duplication assertion");
+        return;
+    };
+
+    let occurrences = text.matches("1.Alpha").count();
+    assert_eq!(
+        occurrences, 1,
+        "marker \"1.Alpha\" rendered {occurrences}× — multi-GlyphRun duplication regression; \
+         extracted text: {text:?}"
+    );
+}

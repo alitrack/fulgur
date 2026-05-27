@@ -458,6 +458,10 @@ pub(super) fn extract_paragraph(
     for line in parley_layout.lines() {
         let metrics = line.metrics();
         let mut items = Vec::new();
+        // Track cumulative glyph offset within a Run across consecutive GlyphRuns
+        // that share the same parent Run. Reset when the Run changes.
+        let mut prev_run_key = usize::MAX;
+        let mut run_glyph_offset = 0usize;
 
         for item in line.items() {
             match item {
@@ -474,17 +478,37 @@ pub(super) fn extract_paragraph(
                     let decoration = get_text_decoration(doc, brush.id);
                     let link = ctx.link_cache.lookup(doc, brush.id);
 
+                    // Advance or reset the per-Run offset counter.
+                    let run_key = run.cluster_range().start;
+                    if run_key != prev_run_key {
+                        prev_run_key = run_key;
+                        run_glyph_offset = 0;
+                    }
+                    let glyph_start = run_glyph_offset;
+
+                    // Build (text_range, Glyph) pairs scoped to this GlyphRun.
+                    // `glyph_run.glyphs()` = run.visual_clusters().flat_map(.glyphs())
+                    //   .skip(glyph_start).take(glyph_count).
+                    // We replicate the same window on the annotated cluster sequence
+                    // and advance the offset counter by the number of glyphs consumed.
+                    let mut annotated = run
+                        .visual_clusters()
+                        .flat_map(|cluster| {
+                            let r = cluster.text_range();
+                            cluster.glyphs().map(move |g| (r.clone(), g))
+                        })
+                        .skip(glyph_start);
+
                     let mut glyphs = Vec::new();
-                    let run = glyph_run.run();
-                    for cluster in run.visual_clusters() {
-                        let text_range = cluster.text_range();
-                        for g in cluster.glyphs() {
+                    for g in glyph_run.glyphs() {
+                        if let Some((text_range, _)) = annotated.next() {
+                            run_glyph_offset += 1;
                             glyphs.push(ShapedGlyph {
                                 id: g.id,
                                 x_advance: g.advance / font_size_parley,
                                 x_offset: g.x / font_size_parley,
                                 y_offset: g.y / font_size_parley,
-                                text_range: text_range.clone(),
+                                text_range,
                             });
                         }
                     }
