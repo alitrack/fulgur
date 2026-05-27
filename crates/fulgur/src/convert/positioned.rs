@@ -493,11 +493,10 @@ mod tests {
             .unwrap_or_else(|| panic!("<{tag}> not found in document"))
     }
 
-    // Separate lifetimes: 'doc ends when the function returns (doc is not
-    // stored in ConvertContext); 'store is the lifetime of running_store and
-    // what ConvertContext<'store> actually borrows.
-    fn make_ctx<'doc, 'store>(
-        doc: &'doc mut HtmlDocument,
+    // 'store is the lifetime of running_store, which ConvertContext<'store>
+    // borrows. doc's lifetime is not stored and can be elided.
+    fn make_ctx<'store>(
+        doc: &mut HtmlDocument,
         running_store: &'store RunningElementStore,
     ) -> ConvertContext<'store> {
         let column_styles = crate::blitz_adapter::extract_column_style_table(doc);
