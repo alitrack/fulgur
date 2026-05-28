@@ -1137,7 +1137,7 @@ dependencies = [
  "toml",
  "unicode-properties",
  "unicode-segmentation",
- "usvg 0.46.0",
+ "usvg 0.45.1",
  "woff2-patched",
 ]
 
