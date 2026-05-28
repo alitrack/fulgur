@@ -1134,6 +1134,13 @@ pub fn element_text(doc: &blitz_dom::BaseDocument, node_id: usize) -> String {
 /// markup via blitz's `outer_html()` (the element stays in the DOM after parsing)
 /// and re-parse it with *fulgur's* `usvg`, producing a tree krilla-svg accepts.
 /// Taking `&Node` (not `&ElementData`) is what gives us access to `outer_html()`.
+///
+/// The reparse must use the same font database blitz used, otherwise SVG
+/// `<text>` elements lose their glyphs (usvg needs fonts to shape text at parse
+/// time). blitz's `parse_svg` builds `usvg::Options { fontdb: FONT_DB, .. }`
+/// from system fonts; we mirror that with a process-global system-font database
+/// (see [`SVG_FONTDB`]). This inherits fulgur's documented SVG-text determinism
+/// caveat (system fonts must be pinned, e.g. via `FONTCONFIG_FILE`).
 pub fn extract_inline_svg_tree(node: &blitz_dom::Node) -> Option<std::sync::Arc<usvg::Tree>> {
     use blitz_dom::node::ImageData;
     // Only re-parse when blitz actually recognised this element as an inline SVG.
@@ -1149,9 +1156,23 @@ pub fn extract_inline_svg_tree(node: &blitz_dom::Node) -> Option<std::sync::Arc<
         markup = markup.replacen("<svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"", 1);
     }
 
-    let tree = usvg::Tree::from_data(markup.as_bytes(), &usvg::Options::default()).ok()?;
+    let options = usvg::Options {
+        fontdb: SVG_FONTDB.clone(),
+        ..Default::default()
+    };
+    let tree = usvg::Tree::from_data(markup.as_bytes(), &options).ok()?;
     Some(std::sync::Arc::new(tree))
 }
+
+/// Process-global font database for re-parsing inline `<svg>` text, mirroring
+/// blitz-dom's lazily-initialised `FONT_DB`. Loaded once from the system fonts
+/// so repeated inline-SVG reparses don't rescan the font directories.
+static SVG_FONTDB: std::sync::LazyLock<std::sync::Arc<usvg::fontdb::Database>> =
+    std::sync::LazyLock::new(|| {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        std::sync::Arc::new(db)
+    });
 
 /// Inspect a node's computed `content` property and return the first `Image`
 /// variant's URL as an owned `String` if the content is a single
