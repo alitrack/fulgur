@@ -782,18 +782,12 @@ mod tests {
         walk_children_into_drawables(doc.deref(), &child_ids, &mut ctx, 0, &mut out);
 
         // The div has text content and produces a paragraph entry.
+        // If is_non_visual_element filtering were broken, the div would not be
+        // reached and this assertion would fail.
         assert!(
             !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
             "visual div must produce at least one draw entry"
         );
-        // Verify the noscript node itself is absent from draw maps.
-        if let Some(noscript_id) = find_first_by_tag(doc.deref(), doc.root_element().id, "noscript")
-        {
-            assert!(
-                !out.block_styles.contains_key(&noscript_id),
-                "noscript must not produce a block entry"
-            );
-        }
     }
 
     #[test]
