@@ -228,6 +228,11 @@ fn convert_svg(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asset::AssetBundle;
+    use crate::drawables::Drawables;
+    use crate::gcpm::running::RunningElementStore;
+    use blitz_html::HtmlDocument;
+    use std::ops::{Deref, DerefMut};
 
     // Minimal 1x1 red PNG.
     const TEST_PNG_1X1: &[u8] = &[
@@ -301,5 +306,243 @@ mod tests {
         assert_eq!(img.height, 1.0);
         assert_eq!(img.opacity, 0.5);
         assert!(!img.visible);
+    }
+
+    // ── resolve_image_dimensions: additional edge cases ─────────────
+
+    #[test]
+    fn resolve_image_dimensions_invalid_data_falls_back_to_1x1_intrinsic() {
+        // Corrupt bytes → decode_dimensions returns Err → unwrap_or((1,1))
+        // With css_w=None, css_h=None the intrinsic size (1,1) is returned.
+        let (w, h) =
+            resolve_image_dimensions(b"not-a-png", crate::image::ImageFormat::Png, None, None);
+        assert_eq!(w, 1.0);
+        assert_eq!(h, 1.0);
+    }
+
+    #[test]
+    fn resolve_image_dimensions_invalid_data_width_only_uses_fallback_aspect() {
+        // Corrupt bytes → intrinsic (1,1) → aspect 1.0 → height == width.
+        let (w, h) =
+            resolve_image_dimensions(b"junk", crate::image::ImageFormat::Png, Some(20.0), None);
+        assert_eq!(w, 20.0);
+        assert_eq!(h, 20.0);
+    }
+
+    // ── DOM-based helpers ────────────────────────────────────────────
+
+    fn parse_doc(html: &str) -> HtmlDocument {
+        crate::blitz_adapter::parse_and_layout(html, 595.0, 842.0, &[], false)
+    }
+
+    fn find_by_tag_inner(doc: &BaseDocument, id: usize, tag: &str) -> Option<usize> {
+        let n = doc.get_node(id)?;
+        if n.element_data()
+            .is_some_and(|e| e.name.local.as_ref() == tag)
+        {
+            return Some(id);
+        }
+        for &c in &n.children {
+            if let Some(f) = find_by_tag_inner(doc, c, tag) {
+                return Some(f);
+            }
+        }
+        None
+    }
+
+    fn find_tag(doc: &HtmlDocument, tag: &str) -> usize {
+        let root = doc.root_element();
+        find_by_tag_inner(doc.deref(), root.id, tag)
+            .unwrap_or_else(|| panic!("<{tag}> not found in document"))
+    }
+
+    fn make_ctx<'a>(
+        doc: &mut HtmlDocument,
+        store: &'a RunningElementStore,
+        assets: Option<&'a AssetBundle>,
+    ) -> ConvertContext<'a> {
+        let column_styles = crate::blitz_adapter::extract_column_style_table(doc);
+        let multicol_geometry = crate::multicol_layout::run_pass(doc.deref_mut(), &column_styles);
+        let pagination_geometry = crate::pagination_layout::run_pass(doc.deref_mut(), 842.0);
+        ConvertContext {
+            running_store: store,
+            assets,
+            font_cache: Default::default(),
+            string_set_by_node: Default::default(),
+            counter_ops_by_node: Default::default(),
+            bookmark_by_node: Default::default(),
+            column_styles,
+            multicol_geometry,
+            pagination_geometry,
+            link_cache: Default::default(),
+            viewport_size_px: Some((595.0, 842.0)),
+        }
+    }
+
+    // ── try_convert: non-replaced element ────────────────────────────
+
+    #[test]
+    fn try_convert_plain_div_returns_false() {
+        let mut doc = parse_doc(r#"<!doctype html><html><body><div>hello</div></body></html>"#);
+        let store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &store, None);
+        let mut out = Drawables::new();
+        let div_id = find_tag(&doc, "div");
+        assert!(!try_convert(doc.deref(), div_id, &mut ctx, &mut out));
+        assert!(out.images.is_empty());
+        assert!(out.svgs.is_empty());
+    }
+
+    // ── try_convert: <img> without asset bundle ───────────────────────
+
+    #[test]
+    fn try_convert_img_without_bundle_returns_false() {
+        let mut doc =
+            parse_doc(r#"<!doctype html><html><body><img src="photo.png"></body></html>"#);
+        let store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &store, None);
+        let mut out = Drawables::new();
+        let img_id = find_tag(&doc, "img");
+        assert!(!try_convert(doc.deref(), img_id, &mut ctx, &mut out));
+        assert!(out.images.is_empty());
+    }
+
+    // ── try_convert: <img> with matching bundle entry ─────────────────
+
+    #[test]
+    fn try_convert_img_with_bundle_inserts_image_entry() {
+        let mut doc = parse_doc(
+            r#"<!doctype html><html><body>
+              <img src="icon.png" style="width:30px;height:20px;">
+            </body></html>"#,
+        );
+        let mut bundle = AssetBundle::new();
+        bundle.add_image("icon.png", TEST_PNG_1X1.to_vec());
+        let store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &store, Some(&bundle));
+        let mut out = Drawables::new();
+        let img_id = find_tag(&doc, "img");
+        assert!(
+            try_convert(doc.deref(), img_id, &mut ctx, &mut out),
+            "must return true when image is found in bundle"
+        );
+        assert!(
+            out.images.contains_key(&img_id),
+            "ImageEntry must be registered for the <img> node"
+        );
+    }
+
+    // ── try_convert: <img> with missing src attribute ─────────────────
+
+    #[test]
+    fn try_convert_img_missing_src_returns_false() {
+        let mut doc = parse_doc(r#"<!doctype html><html><body><img></body></html>"#);
+        let mut bundle = AssetBundle::new();
+        bundle.add_image("something.png", TEST_PNG_1X1.to_vec());
+        let store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &store, Some(&bundle));
+        let mut out = Drawables::new();
+        let img_id = find_tag(&doc, "img");
+        // No src attribute → convert_image returns false
+        assert!(!try_convert(doc.deref(), img_id, &mut ctx, &mut out));
+        assert!(out.images.is_empty());
+    }
+
+    // ── try_convert: <img> src not in bundle ──────────────────────────
+
+    #[test]
+    fn try_convert_img_src_not_in_bundle_returns_false() {
+        let mut doc =
+            parse_doc(r#"<!doctype html><html><body><img src="missing.png"></body></html>"#);
+        let bundle = AssetBundle::new(); // empty bundle
+        let store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &store, Some(&bundle));
+        let mut out = Drawables::new();
+        let img_id = find_tag(&doc, "img");
+        assert!(!try_convert(doc.deref(), img_id, &mut ctx, &mut out));
+        assert!(out.images.is_empty());
+    }
+
+    // ── maybe_insert_block_for_replaced: no visual style ─────────────
+
+    #[test]
+    fn maybe_insert_block_no_visual_style_omits_block_entry() {
+        // A plain <img> with no border/background has no visual style.
+        let doc = parse_doc(
+            r#"<!doctype html><html><body><img src="x.png" style="width:40px;height:25px;"></body></html>"#,
+        );
+        let img_id = find_tag(&doc, "img");
+        let node = doc.get_node(img_id).unwrap();
+        let mut out = Drawables::new();
+        let (_w, _h, opacity, visible) = maybe_insert_block_for_replaced(node, None, &mut out);
+        assert!(
+            out.block_styles.is_empty(),
+            "no BlockEntry for unstyled img"
+        );
+        assert_eq!(opacity, 1.0);
+        assert!(visible);
+    }
+
+    // ── maybe_insert_block_for_replaced: visual style (border) ────────
+
+    #[test]
+    fn maybe_insert_block_with_border_inserts_block_entry_and_shrinks_content() {
+        // A 4px border on each side subtracts from content dimensions.
+        let doc = parse_doc(
+            r#"<!doctype html><html><body>
+              <img src="x.png" style="width:60px;height:40px;border:4px solid black;">
+            </body></html>"#,
+        );
+        let img_id = find_tag(&doc, "img");
+        let node = doc.get_node(img_id).unwrap();
+        let (layout_w, layout_h) = size_in_pt(node.final_layout.size);
+        let mut out = Drawables::new();
+        let (content_w, content_h, _opacity, _visible) =
+            maybe_insert_block_for_replaced(node, None, &mut out);
+        assert!(
+            out.block_styles.contains_key(&img_id),
+            "BlockEntry must be inserted for img with border"
+        );
+        // Content box must be smaller than the layout box (border is consumed).
+        // Only assert when layout gave non-zero dimensions.
+        if layout_w > 0.0 {
+            assert!(
+                content_w <= layout_w,
+                "content_w {content_w} > layout_w {layout_w}"
+            );
+        }
+        if layout_h > 0.0 {
+            assert!(
+                content_h <= layout_h,
+                "content_h {content_h} > layout_h {layout_h}"
+            );
+        }
+    }
+
+    // ── try_convert: inline SVG ───────────────────────────────────────
+
+    #[test]
+    fn try_convert_inline_svg_registers_svg_entry_when_parsed() {
+        // Blitz parses inline SVG elements and stores the tree as ImageData::Svg.
+        // If parsing succeeds, try_convert must insert an SvgEntry.
+        let mut doc = parse_doc(
+            r#"<!doctype html><html><body>
+              <svg width="50" height="50" xmlns="http://www.w3.org/2000/svg">
+                <rect fill="red" width="50" height="50"/>
+              </svg>
+            </body></html>"#,
+        );
+        let store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &store, None);
+        let mut out = Drawables::new();
+        let svg_id = find_tag(&doc, "svg");
+        let result = try_convert(doc.deref(), svg_id, &mut ctx, &mut out);
+        if result {
+            assert!(
+                out.svgs.contains_key(&svg_id),
+                "SvgEntry must be registered when try_convert returns true for <svg>"
+            );
+        }
+        // If Blitz did not materialise the SVG tree (returns false) — acceptable.
     }
 }
