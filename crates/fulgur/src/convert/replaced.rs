@@ -503,28 +503,27 @@ mod tests {
             out.block_styles.contains_key(&img_id),
             "BlockEntry must be inserted for img with border"
         );
-        // Content box must be smaller than the layout box (border is consumed).
-        // Only assert when layout gave non-zero dimensions.
-        if layout_w > 0.0 {
-            assert!(
-                content_w <= layout_w,
-                "content_w {content_w} > layout_w {layout_w}"
-            );
-        }
-        if layout_h > 0.0 {
-            assert!(
-                content_h <= layout_h,
-                "content_h {content_h} > layout_h {layout_h}"
-            );
-        }
+        // content_w / content_h must not exceed the layout box (border is consumed).
+        // `.max(0.0)` in the production code guarantees content ≤ layout even when
+        // Taffy gives (0, 0) to an unsized element, so the assertions hold always.
+        assert!(
+            content_w <= layout_w,
+            "content_w {content_w} > layout_w {layout_w}"
+        );
+        assert!(
+            content_h <= layout_h,
+            "content_h {content_h} > layout_h {layout_h}"
+        );
     }
 
-    // ── try_convert: inline SVG ───────────────────────────────────────
+    // ── try_convert: inline SVG (smoke) ──────────────────────────────
 
     #[test]
-    fn try_convert_inline_svg_registers_svg_entry_when_parsed() {
-        // Blitz parses inline SVG elements and stores the tree as ImageData::Svg.
-        // If parsing succeeds, try_convert must insert an SvgEntry.
+    fn try_convert_inline_svg_does_not_panic() {
+        // Blitz may or may not materialise the SVG tree in a test environment
+        // (inline SVG parsing depends on system fonts via fontdb). We verify
+        // only that try_convert completes without panicking and that any
+        // registered SvgEntry is consistent with the return value.
         let mut doc = parse_doc(
             r#"<!doctype html><html><body>
               <svg width="50" height="50" xmlns="http://www.w3.org/2000/svg">
@@ -537,12 +536,7 @@ mod tests {
         let mut out = Drawables::new();
         let svg_id = find_tag(&doc, "svg");
         let result = try_convert(doc.deref(), svg_id, &mut ctx, &mut out);
-        if result {
-            assert!(
-                out.svgs.contains_key(&svg_id),
-                "SvgEntry must be registered when try_convert returns true for <svg>"
-            );
-        }
-        // If Blitz did not materialise the SVG tree (returns false) — acceptable.
+        // Invariant: if try_convert returned true, the SvgEntry must be present.
+        assert_eq!(result, out.svgs.contains_key(&svg_id));
     }
 }
