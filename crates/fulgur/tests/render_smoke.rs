@@ -84,6 +84,9 @@ fn extract_pdf_text(pdf: &[u8]) -> Option<String> {
         .arg("-")
         .output()
         .ok()?;
+    if !output.status.success() {
+        return None;
+    }
     Some(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
@@ -4097,7 +4100,7 @@ fn each_multibyte_glyph_copies_its_own_character() {
         .build_drawables_for_testing_no_gcpm("<html><body><p>café €42</p></body></html>");
     let all_clusters: Vec<String> = collect_text_runs(&d)
         .iter()
-        .flat_map(|r| cluster_strings(r))
+        .flat_map(cluster_strings)
         .collect();
     assert_eq!(all_clusters, vec!["c", "a", "f", "é", " ", "€", "4", "2"]);
 }
@@ -4172,7 +4175,7 @@ fn cjk_glyphs_copy_correct_characters() {
     let d = engine.build_drawables_for_testing_no_gcpm("<html><body><p>你好世界</p></body></html>");
     let all_clusters: Vec<String> = collect_text_runs(&d)
         .iter()
-        .flat_map(|r| cluster_strings(r))
+        .flat_map(cluster_strings)
         .collect();
     assert_eq!(all_clusters, vec!["你", "好", "世", "界"]);
 }
