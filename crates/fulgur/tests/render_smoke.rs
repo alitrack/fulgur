@@ -3770,6 +3770,11 @@ fn target_text_first_letter_typographic() {
     // alone could come from the body's `<h2>` "Hello"; `「H` together
     // proves compute_first_letter folded the leading CJK typographic
     // punctuation into the first-letter result.
+    //
+    // On Windows, Parley falls back to system CJK fonts (Meiryo / Yu
+    // Gothic) which lack recoverable ToUnicode entries, so pdftotext
+    // cannot extract 「. Skip the assertion on that platform only.
+    #[cfg(not(target_os = "windows"))]
     assert!(
         text.contains("「H"),
         "extracted PDF text missing contiguous `「H` — \
