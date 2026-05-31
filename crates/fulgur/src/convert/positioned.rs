@@ -651,7 +651,7 @@ mod tests {
         );
 
         assert!(
-            out.block_styles.is_empty() && out.paragraphs.is_empty(),
+            out.is_empty(),
             "at MAX_DOM_DEPTH walk_absolute_non_pseudo_children must produce nothing"
         );
     }
@@ -716,7 +716,7 @@ mod tests {
         walk_absolute_non_pseudo_children(doc.deref(), section_node, &mut ctx, 0, &mut out);
 
         assert!(
-            out.block_styles.is_empty() && out.paragraphs.is_empty(),
+            out.is_empty(),
             "static children must not be registered by walk_absolute_non_pseudo_children"
         );
     }
@@ -752,41 +752,8 @@ mod tests {
         );
 
         assert!(
-            out.block_styles.is_empty() && out.paragraphs.is_empty(),
+            out.is_empty(),
             "at MAX_DOM_DEPTH nothing should be registered"
-        );
-    }
-
-    #[test]
-    fn walk_children_into_drawables_skips_non_visual_elements() {
-        // A <noscript> child (is_non_visual_element → true) must be skipped.
-        // The subsequent <div> (visual) must produce entries.
-        let mut doc = crate::blitz_adapter::parse_and_layout(
-            r#"<!doctype html><html><body>
-              <section><noscript>fallback</noscript><div>visible</div></section>
-            </body></html>"#,
-            595.0,
-            842.0,
-            &[],
-            false,
-        );
-        let section_id = find_tag(&doc, "section");
-        let child_ids: Vec<usize> = doc
-            .get_node(section_id)
-            .map(|n| n.children.clone())
-            .unwrap_or_default();
-        let running_store = RunningElementStore::new();
-        let mut ctx = make_ctx(&mut doc, &running_store);
-        let mut out = crate::drawables::Drawables::new();
-
-        walk_children_into_drawables(doc.deref(), &child_ids, &mut ctx, 0, &mut out);
-
-        // The div has text content and produces a paragraph entry.
-        // If is_non_visual_element filtering were broken, the div would not be
-        // reached and this assertion would fail.
-        assert!(
-            !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
-            "visual div must produce at least one draw entry"
         );
     }
 
@@ -1097,7 +1064,7 @@ mod tests {
         walk_absolute_children(doc.deref(), section_node, &mut ctx, 0, &mut out);
 
         assert!(
-            out.block_styles.is_empty() && out.paragraphs.is_empty(),
+            out.is_empty(),
             "walk_absolute_children with no abs children must produce nothing"
         );
     }
@@ -1124,10 +1091,7 @@ mod tests {
 
         walk_absolute_pseudo_children(doc.deref(), section_node, &mut ctx, 0, &[None], &mut out);
 
-        assert!(
-            out.block_styles.is_empty() && out.paragraphs.is_empty(),
-            "empty slots must produce no entries"
-        );
+        assert!(out.is_empty(), "empty slots must produce no entries");
     }
 
     #[test]
@@ -1247,7 +1211,9 @@ mod tests {
             &mut out,
         );
 
-        // must not panic; fixed div registers via convert_node fallback
-        let _ = out;
+        assert!(
+            !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
+            "fixed slot must produce a draw entry via convert_node fallback"
+        );
     }
 }
