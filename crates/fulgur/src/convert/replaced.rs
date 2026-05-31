@@ -232,7 +232,7 @@ mod tests {
     use crate::drawables::Drawables;
     use crate::gcpm::running::RunningElementStore;
     use blitz_html::HtmlDocument;
-    use std::ops::{Deref, DerefMut};
+    use std::ops::Deref;
 
     // Minimal 1x1 red PNG.
     const TEST_PNG_1X1: &[u8] = &[
@@ -352,7 +352,7 @@ mod tests {
 
     fn find_tag(doc: &HtmlDocument, tag: &str) -> usize {
         let root = doc.root_element();
-        find_by_tag_inner(doc.deref(), root.id, tag)
+        find_by_tag_inner(doc, root.id, tag)
             .unwrap_or_else(|| panic!("<{tag}> not found in document"))
     }
 
@@ -362,8 +362,8 @@ mod tests {
         assets: Option<&'a AssetBundle>,
     ) -> ConvertContext<'a> {
         let column_styles = crate::blitz_adapter::extract_column_style_table(doc);
-        let multicol_geometry = crate::multicol_layout::run_pass(doc.deref_mut(), &column_styles);
-        let pagination_geometry = crate::pagination_layout::run_pass(doc.deref_mut(), 842.0);
+        let multicol_geometry = crate::multicol_layout::run_pass(doc, &column_styles);
+        let pagination_geometry = crate::pagination_layout::run_pass(doc, 842.0);
         ConvertContext {
             running_store: store,
             assets,
