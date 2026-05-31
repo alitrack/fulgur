@@ -623,6 +623,40 @@ mod tests {
     // ── walk_absolute_non_pseudo_children ────────────────────────────
 
     #[test]
+    fn walk_absolute_non_pseudo_children_at_max_depth_short_circuits() {
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section>
+                <div style="position:absolute;width:10px;height:10px;">abs</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_id = find_tag(&doc, "section");
+        let section_node = doc.get_node(section_id).unwrap();
+
+        walk_absolute_non_pseudo_children(
+            doc.deref(),
+            section_node,
+            &mut ctx,
+            crate::MAX_DOM_DEPTH,
+            &mut out,
+        );
+
+        assert!(
+            out.is_empty(),
+            "at MAX_DOM_DEPTH walk_absolute_non_pseudo_children must produce nothing"
+        );
+    }
+
+    #[test]
     fn walk_absolute_non_pseudo_children_registers_abs_child_block_entry() {
         // Container with one abs-positioned child (with text content so
         // block::convert uses the container path, which always inserts a
@@ -682,12 +716,46 @@ mod tests {
         walk_absolute_non_pseudo_children(doc.deref(), section_node, &mut ctx, 0, &mut out);
 
         assert!(
-            out.block_styles.is_empty() && out.paragraphs.is_empty(),
+            out.is_empty(),
             "static children must not be registered by walk_absolute_non_pseudo_children"
         );
     }
 
     // ── walk_children_into_drawables ────────────────────────────────
+
+    #[test]
+    fn walk_children_into_drawables_at_max_depth_short_circuits() {
+        // At MAX_DOM_DEPTH the function must return immediately without
+        // visiting any children, even though child_ids is non-empty.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body><div><p>text</p></div></body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let div_id = find_tag(&doc, "div");
+        let child_ids: Vec<usize> = doc
+            .get_node(div_id)
+            .map(|n| n.children.clone())
+            .unwrap_or_default();
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        walk_children_into_drawables(
+            doc.deref(),
+            &child_ids,
+            &mut ctx,
+            crate::MAX_DOM_DEPTH,
+            &mut out,
+        );
+
+        assert!(
+            out.is_empty(),
+            "at MAX_DOM_DEPTH nothing should be registered"
+        );
+    }
 
     #[test]
     fn walk_children_into_drawables_excludes_abs_positioned_children() {
@@ -725,6 +793,427 @@ mod tests {
         assert!(
             !out.block_styles.contains_key(&abs_div_id),
             "abs child must be excluded by walk_children_into_drawables"
+        );
+    }
+
+    #[test]
+    fn walk_children_into_drawables_skips_non_visual_elements() {
+        // A section that contains a <script> (non-visual) child and a <div>
+        // child with text. The script should be filtered out; the div must
+        // produce at least one draw entry.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section>
+                <script>/* noise */</script>
+                <div>content</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_id = find_tag(&doc, "section");
+        let child_ids: Vec<usize> = doc
+            .get_node(section_id)
+            .map(|n| n.children.clone())
+            .unwrap_or_default();
+
+        walk_children_into_drawables(doc.deref(), &child_ids, &mut ctx, 0, &mut out);
+
+        // Script node (if present in the DOM) must not have been registered.
+        // Div with "content" should produce at least one draw entry.
+        if let Some(script_id) = find_first_by_tag(doc.deref(), doc.root_element().id, "script") {
+            assert!(
+                !out.block_styles.contains_key(&script_id)
+                    && !out.paragraphs.contains_key(&script_id),
+                "script element must be skipped by walk_children_into_drawables"
+            );
+        }
+        // At a minimum the div with text should produce a paragraph entry.
+        assert!(
+            !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
+            "div child must produce at least one draw entry"
+        );
+    }
+
+    // ── cb_padding_box ────────────────────────────────────────────────
+
+    #[test]
+    fn cb_padding_box_no_border_returns_full_layout_size_and_zero_offsets() {
+        // A div with explicit size but no border. The padding box should equal
+        // the Taffy layout size (sz.width, sz.height) and border_top_left = (0, 0).
+        let doc = parse_doc(
+            r#"<!doctype html><html><body>
+                <div style="width:100px;height:50px;">x</div>
+            </body></html>"#,
+        );
+        let div_id = find_tag(&doc, "div");
+        let node = doc.get_node(div_id).unwrap();
+        let ((pb_w, pb_h), (bl, bt)) = cb_padding_box(node);
+        let sz = node.final_layout.size;
+        // No border → pb_w == sz.width, pb_h == sz.height.
+        assert!(
+            (pb_w - sz.width).abs() < 0.01,
+            "no border: pb_w should equal layout width; pb_w={pb_w} sz.width={sz_w}",
+            sz_w = sz.width
+        );
+        assert!(
+            (pb_h - sz.height).abs() < 0.01,
+            "no border: pb_h should equal layout height; pb_h={pb_h} sz.height={sz_h}",
+            sz_h = sz.height
+        );
+        assert!(
+            bl.abs() < 0.001,
+            "no border: left offset should be 0; got {bl}"
+        );
+        assert!(
+            bt.abs() < 0.001,
+            "no border: top offset should be 0; got {bt}"
+        );
+    }
+
+    #[test]
+    fn cb_padding_box_with_border_reduces_padding_box_and_gives_nonzero_offsets() {
+        // A div with a 10px uniform border. The padding box must be strictly
+        // smaller than the border-box and border_top_left must be > 0.
+        let doc = parse_doc(
+            r#"<!doctype html><html><body>
+                <div style="width:100px;height:100px;border:10px solid black;">x</div>
+            </body></html>"#,
+        );
+        let div_id = find_tag(&doc, "div");
+        let node = doc.get_node(div_id).unwrap();
+        let ((pb_w, _pb_h), (bl, bt)) = cb_padding_box(node);
+        let sz = node.final_layout.size;
+        // With 10px border on each side, the border-box is 120×120px and the
+        // padding box (content) is 100×100px.
+        assert!(
+            pb_w < sz.width,
+            "10px border: padding box width must be less than border-box; pb_w={pb_w} sz.width={sz_w}",
+            sz_w = sz.width
+        );
+        assert!(bl > 0.0, "10px border: left offset must be > 0; got {bl}");
+        assert!(bt > 0.0, "10px border: top offset must be > 0; got {bt}");
+    }
+
+    // ── resolve_cb_for_absolute ───────────────────────────────────────
+
+    #[test]
+    fn resolve_cb_for_absolute_returns_some_for_positioned_ancestor() {
+        // Pass the div child of a position:relative section. The function
+        // must walk up, find the relative section, and return Some immediately.
+        let doc = parse_doc(
+            r#"<!doctype html><html><body>
+                <section style="position:relative;width:200px;height:100px;">
+                    <div>text</div>
+                </section>
+            </body></html>"#,
+        );
+        let div_id = find_tag(&doc, "div");
+        let div_node = doc.get_node(div_id).unwrap();
+        let result = resolve_cb_for_absolute(doc.deref(), div_node, false, None);
+        assert!(
+            result.is_some(),
+            "position:relative section should be found as containing block"
+        );
+        let cb = result.unwrap();
+        assert!(
+            cb.padding_box_size.0 > 0.0,
+            "CB padding-box width should be > 0 (section has explicit width)"
+        );
+    }
+
+    #[test]
+    fn resolve_cb_for_absolute_uses_body_fallback_when_all_ancestors_static() {
+        // The span's parent div is static, so resolve_cb_for_absolute should
+        // walk all the way up to body and return the body fallback.
+        let doc = parse_doc(
+            r#"<!doctype html><html><body>
+                <div style="width:200px;height:100px;">
+                    <span>text</span>
+                </div>
+            </body></html>"#,
+        );
+        let span_id = find_tag(&doc, "span");
+        let span_node = doc.get_node(span_id).unwrap();
+        let result = resolve_cb_for_absolute(doc.deref(), span_node, false, Some((595.0, 842.0)));
+        // All ancestors are static → body fallback must be returned.
+        let cb = result.expect(
+            "body fallback should always produce Some when the document has a body element",
+        );
+        // Body is viewport-wide (~579px after default margins), which is wider
+        // than the 200px div. Asserting > 200 proves the function used the body
+        // CB and did not stop at the static div ancestor.
+        assert!(
+            cb.padding_box_size.0 > 200.0,
+            "body padding-box width should exceed the 200px static div, confirming body fallback was used; got {}",
+            cb.padding_box_size.0
+        );
+    }
+
+    #[test]
+    fn resolve_cb_for_absolute_fixed_skips_positioned_ancestors_and_uses_body_fallback() {
+        // With is_fixed=true the `!is_fixed && !is_position_static(cur)` check
+        // short-circuits to false, so even a position:relative parent is ignored
+        // and the body fallback is used.
+        let doc = parse_doc(
+            r#"<!doctype html><html><body>
+                <section style="position:relative;width:200px;height:100px;">
+                    <div>text</div>
+                </section>
+            </body></html>"#,
+        );
+        let div_id = find_tag(&doc, "div");
+        let div_node = doc.get_node(div_id).unwrap();
+        let result = resolve_cb_for_absolute(doc.deref(), div_node, true, Some((595.0, 842.0)));
+        // is_fixed=true → relative section is skipped → body fallback returned.
+        let cb = result
+            .expect("fixed: body fallback should be returned even when a relative parent exists");
+        // Body is viewport-wide (~579px after default margins), which is wider
+        // than the 200px section. Asserting > 200 proves the function skipped
+        // the relative section and used the body CB instead.
+        assert!(
+            cb.padding_box_size.0 > 200.0,
+            "fixed: body padding-box width should exceed the 200px relative section, confirming it was skipped; got {}",
+            cb.padding_box_size.0
+        );
+    }
+
+    #[test]
+    fn resolve_cb_for_absolute_positioned_node_passed_directly_returns_some() {
+        // When we pass a node that is itself non-static, the function returns
+        // Some on the very first iteration (cur == parent, is_position_static=false).
+        let doc = parse_doc(
+            r#"<!doctype html><html><body>
+                <div style="position:relative;width:150px;height:80px;">x</div>
+            </body></html>"#,
+        );
+        let div_id = find_tag(&doc, "div");
+        let div_node = doc.get_node(div_id).unwrap();
+        let result = resolve_cb_for_absolute(doc.deref(), div_node, false, None);
+        assert!(result.is_some(), "non-static node passed directly → Some");
+        let cb = result.unwrap();
+        // parent_offset_in_cb_bp should be (0,0) since the loop fires immediately
+        // (no offset accumulated yet).
+        assert!(
+            (cb.parent_offset_in_cb_bp.0).abs() < 0.001,
+            "no offset accumulated on first iteration"
+        );
+    }
+
+    // ── walk_absolute_children ────────────────────────────────────────
+
+    #[test]
+    fn walk_absolute_children_registers_abs_positioned_child() {
+        // walk_absolute_children is the combined entry that calls both
+        // walk_absolute_pseudo_children and walk_absolute_non_pseudo_children.
+        // Verify that an abs-positioned non-pseudo child is registered via the
+        // non-pseudo path.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section style="position:relative;">
+                <div style="position:absolute;width:20px;height:20px;">abs</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_id = find_tag(&doc, "section");
+        let section_node = doc.get_node(section_id).unwrap();
+
+        walk_absolute_children(doc.deref(), section_node, &mut ctx, 0, &mut out);
+
+        let abs_div_id = find_tag(&doc, "div");
+        assert!(
+            out.block_styles.contains_key(&abs_div_id) || out.paragraphs.contains_key(&abs_div_id),
+            "abs-positioned div must be registered by walk_absolute_children"
+        );
+    }
+
+    #[test]
+    fn walk_absolute_children_on_static_only_node_is_empty() {
+        // When no abs-positioned children exist, walk_absolute_children
+        // must leave Drawables empty.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section><div>static</div></section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_id = find_tag(&doc, "section");
+        let section_node = doc.get_node(section_id).unwrap();
+
+        walk_absolute_children(doc.deref(), section_node, &mut ctx, 0, &mut out);
+
+        assert!(
+            out.is_empty(),
+            "walk_absolute_children with no abs children must produce nothing"
+        );
+    }
+
+    // ── walk_absolute_pseudo_children ───────────────────────────────
+
+    #[test]
+    fn walk_absolute_pseudo_children_empty_slots_is_noop() {
+        // Passing &[None] as slots: the flattened iterator yields nothing,
+        // so no conversion occurs. Covers the function entry and loop header.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body><section><div>x</div></section></body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_id = find_tag(&doc, "section");
+        let section_node = doc.get_node(section_id).unwrap();
+
+        walk_absolute_pseudo_children(doc.deref(), section_node, &mut ctx, 0, &[None], &mut out);
+
+        assert!(out.is_empty(), "empty slots must produce no entries");
+    }
+
+    #[test]
+    fn walk_absolute_pseudo_children_static_parent_resolves_cb_from_ancestors() {
+        // Passing an abs-positioned node's ID as a slot exercises the full
+        // loop body when parent_is_static=true:
+        //   • resolve_cb_for_absolute climbs to <body>
+        //   • cb_padding_box is called for ancestor nodes
+        //   • try_build_absolute_pseudo_image returns None (no content:url)
+        //   • convert_node is called as fallback, producing draw entries
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section>
+                <div style="position:absolute;width:10px;height:10px;">abs</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let section_id = find_tag(&doc, "section");
+        let abs_div_id = find_tag(&doc, "div");
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_node = doc.get_node(section_id).unwrap();
+
+        // parent_is_static=true (section default) → cb_absolute branch
+        walk_absolute_pseudo_children(
+            doc.deref(),
+            section_node,
+            &mut ctx,
+            0,
+            &[Some(abs_div_id)],
+            &mut out,
+        );
+
+        assert!(
+            !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
+            "abs slot must produce a draw entry via convert_node fallback"
+        );
+    }
+
+    #[test]
+    fn walk_absolute_pseudo_children_non_static_parent_uses_own_padding_box() {
+        // When the container has position:relative (parent_is_static=false),
+        // the else-branch uses cb_padding_box(node) directly instead of
+        // climbing the ancestor chain.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section style="position:relative;width:200px;height:300px;">
+                <div style="position:absolute;width:10px;height:10px;">abs</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let section_id = find_tag(&doc, "section");
+        let abs_div_id = find_tag(&doc, "div");
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_node = doc.get_node(section_id).unwrap();
+
+        // parent_is_static=false → else branch: AbsCb from cb_padding_box(section)
+        walk_absolute_pseudo_children(
+            doc.deref(),
+            section_node,
+            &mut ctx,
+            0,
+            &[Some(abs_div_id)],
+            &mut out,
+        );
+
+        assert!(
+            !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
+            "non-static parent: abs slot must still produce a draw entry"
+        );
+    }
+
+    #[test]
+    fn walk_absolute_pseudo_children_fixed_slot_takes_fixed_cb_branch() {
+        // position:fixed pseudo → cb_fixed branch → resolve_cb_for_absolute
+        // with is_fixed=true (climbs the full tree without stopping at
+        // non-static ancestors).
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section style="position:relative;width:200px;height:300px;">
+                <div style="position:fixed;width:10px;height:10px;">fixed</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let section_id = find_tag(&doc, "section");
+        let fixed_div_id = find_tag(&doc, "div");
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_node = doc.get_node(section_id).unwrap();
+
+        // is_position_fixed(pseudo)=true → cb_fixed branch
+        walk_absolute_pseudo_children(
+            doc.deref(),
+            section_node,
+            &mut ctx,
+            0,
+            &[Some(fixed_div_id)],
+            &mut out,
+        );
+
+        assert!(
+            !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
+            "fixed slot must produce a draw entry via convert_node fallback"
         );
     }
 }
