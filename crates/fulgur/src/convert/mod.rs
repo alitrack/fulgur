@@ -934,16 +934,21 @@ fn shape_paragraph_glyph_runs(
 
                 let mut glyphs = Vec::new();
                 for g in glyph_run.glyphs() {
-                    if let Some((text_range, _)) = annotated.next() {
-                        run_glyph_offset += 1;
-                        glyphs.push(ShapedGlyph {
-                            id: g.id,
-                            x_advance: g.advance / font_size_parley,
-                            x_offset: g.x / font_size_parley,
-                            y_offset: g.y / font_size_parley,
-                            text_range,
-                        });
-                    }
+                    let (text_range, _) = annotated.next().unwrap_or_else(|| {
+                        panic!(
+                            "annotated cluster iterator exhausted before glyph_run.glyphs(); \
+                             run cluster_range={:?}, glyph_start={glyph_start}",
+                            run.cluster_range()
+                        )
+                    });
+                    run_glyph_offset += 1;
+                    glyphs.push(ShapedGlyph {
+                        id: g.id,
+                        x_advance: g.advance / font_size_parley,
+                        x_offset: g.x / font_size_parley,
+                        y_offset: g.y / font_size_parley,
+                        text_range,
+                    });
                 }
 
                 if !glyphs.is_empty() {
