@@ -875,9 +875,16 @@ mod tests {
         let span_node = doc.get_node(span_id).unwrap();
         let result = resolve_cb_for_absolute(doc.deref(), span_node, false, Some((595.0, 842.0)));
         // All ancestors are static → body fallback must be returned.
+        let cb = result.expect(
+            "body fallback should always produce Some when the document has a body element",
+        );
+        // Body is viewport-wide (~579px after default margins), which is wider
+        // than the 200px div. Asserting > 200 proves the function used the body
+        // CB and did not stop at the static div ancestor.
         assert!(
-            result.is_some(),
-            "body fallback should always produce Some when the document has a body element"
+            cb.padding_box_size.0 > 200.0,
+            "body padding-box width should exceed the 200px static div, confirming body fallback was used; got {}",
+            cb.padding_box_size.0
         );
     }
 
@@ -897,9 +904,15 @@ mod tests {
         let div_node = doc.get_node(div_id).unwrap();
         let result = resolve_cb_for_absolute(doc.deref(), div_node, true, Some((595.0, 842.0)));
         // is_fixed=true → relative section is skipped → body fallback returned.
+        let cb = result
+            .expect("fixed: body fallback should be returned even when a relative parent exists");
+        // Body is viewport-wide (~579px after default margins), which is wider
+        // than the 200px section. Asserting > 200 proves the function skipped
+        // the relative section and used the body CB instead.
         assert!(
-            result.is_some(),
-            "fixed: body fallback should be returned even when a relative parent exists"
+            cb.padding_box_size.0 > 200.0,
+            "fixed: body padding-box width should exceed the 200px relative section, confirming it was skipped; got {}",
+            cb.padding_box_size.0
         );
     }
 
@@ -953,9 +966,10 @@ mod tests {
 
         walk_absolute_children(doc.deref(), section_node, &mut ctx, 0, &mut out);
 
+        let abs_div_id = find_tag(&doc, "div");
         assert!(
-            !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
-            "abs-positioned child must be registered by walk_absolute_children"
+            out.block_styles.contains_key(&abs_div_id) || out.paragraphs.contains_key(&abs_div_id),
+            "abs-positioned div must be registered by walk_absolute_children"
         );
     }
 }
