@@ -623,6 +623,40 @@ mod tests {
     // ── walk_absolute_non_pseudo_children ────────────────────────────
 
     #[test]
+    fn walk_absolute_non_pseudo_children_at_max_depth_short_circuits() {
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section>
+                <div style="position:absolute;width:10px;height:10px;">abs</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_id = find_tag(&doc, "section");
+        let section_node = doc.get_node(section_id).unwrap();
+
+        walk_absolute_non_pseudo_children(
+            doc.deref(),
+            section_node,
+            &mut ctx,
+            crate::MAX_DOM_DEPTH,
+            &mut out,
+        );
+
+        assert!(
+            out.is_empty(),
+            "at MAX_DOM_DEPTH walk_absolute_non_pseudo_children must produce nothing"
+        );
+    }
+
+    #[test]
     fn walk_absolute_non_pseudo_children_registers_abs_child_block_entry() {
         // Container with one abs-positioned child (with text content so
         // block::convert uses the container path, which always inserts a
@@ -682,12 +716,46 @@ mod tests {
         walk_absolute_non_pseudo_children(doc.deref(), section_node, &mut ctx, 0, &mut out);
 
         assert!(
-            out.block_styles.is_empty() && out.paragraphs.is_empty(),
+            out.is_empty(),
             "static children must not be registered by walk_absolute_non_pseudo_children"
         );
     }
 
     // ── walk_children_into_drawables ────────────────────────────────
+
+    #[test]
+    fn walk_children_into_drawables_at_max_depth_short_circuits() {
+        // At MAX_DOM_DEPTH the function must return immediately without
+        // visiting any children, even though child_ids is non-empty.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body><div><p>text</p></div></body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let div_id = find_tag(&doc, "div");
+        let child_ids: Vec<usize> = doc
+            .get_node(div_id)
+            .map(|n| n.children.clone())
+            .unwrap_or_default();
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        walk_children_into_drawables(
+            doc.deref(),
+            &child_ids,
+            &mut ctx,
+            crate::MAX_DOM_DEPTH,
+            &mut out,
+        );
+
+        assert!(
+            out.is_empty(),
+            "at MAX_DOM_DEPTH nothing should be registered"
+        );
+    }
 
     #[test]
     fn walk_children_into_drawables_excludes_abs_positioned_children() {
@@ -970,6 +1038,182 @@ mod tests {
         assert!(
             out.block_styles.contains_key(&abs_div_id) || out.paragraphs.contains_key(&abs_div_id),
             "abs-positioned div must be registered by walk_absolute_children"
+        );
+    }
+
+    #[test]
+    fn walk_absolute_children_on_static_only_node_is_empty() {
+        // When no abs-positioned children exist, walk_absolute_children
+        // must leave Drawables empty.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section><div>static</div></section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_id = find_tag(&doc, "section");
+        let section_node = doc.get_node(section_id).unwrap();
+
+        walk_absolute_children(doc.deref(), section_node, &mut ctx, 0, &mut out);
+
+        assert!(
+            out.is_empty(),
+            "walk_absolute_children with no abs children must produce nothing"
+        );
+    }
+
+    // ── walk_absolute_pseudo_children ───────────────────────────────
+
+    #[test]
+    fn walk_absolute_pseudo_children_empty_slots_is_noop() {
+        // Passing &[None] as slots: the flattened iterator yields nothing,
+        // so no conversion occurs. Covers the function entry and loop header.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body><section><div>x</div></section></body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_id = find_tag(&doc, "section");
+        let section_node = doc.get_node(section_id).unwrap();
+
+        walk_absolute_pseudo_children(doc.deref(), section_node, &mut ctx, 0, &[None], &mut out);
+
+        assert!(out.is_empty(), "empty slots must produce no entries");
+    }
+
+    #[test]
+    fn walk_absolute_pseudo_children_static_parent_resolves_cb_from_ancestors() {
+        // Passing an abs-positioned node's ID as a slot exercises the full
+        // loop body when parent_is_static=true:
+        //   • resolve_cb_for_absolute climbs to <body>
+        //   • cb_padding_box is called for ancestor nodes
+        //   • try_build_absolute_pseudo_image returns None (no content:url)
+        //   • convert_node is called as fallback, producing draw entries
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section>
+                <div style="position:absolute;width:10px;height:10px;">abs</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let section_id = find_tag(&doc, "section");
+        let abs_div_id = find_tag(&doc, "div");
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_node = doc.get_node(section_id).unwrap();
+
+        // parent_is_static=true (section default) → cb_absolute branch
+        walk_absolute_pseudo_children(
+            doc.deref(),
+            section_node,
+            &mut ctx,
+            0,
+            &[Some(abs_div_id)],
+            &mut out,
+        );
+
+        assert!(
+            !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
+            "abs slot must produce a draw entry via convert_node fallback"
+        );
+    }
+
+    #[test]
+    fn walk_absolute_pseudo_children_non_static_parent_uses_own_padding_box() {
+        // When the container has position:relative (parent_is_static=false),
+        // the else-branch uses cb_padding_box(node) directly instead of
+        // climbing the ancestor chain.
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section style="position:relative;width:200px;height:300px;">
+                <div style="position:absolute;width:10px;height:10px;">abs</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let section_id = find_tag(&doc, "section");
+        let abs_div_id = find_tag(&doc, "div");
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_node = doc.get_node(section_id).unwrap();
+
+        // parent_is_static=false → else branch: AbsCb from cb_padding_box(section)
+        walk_absolute_pseudo_children(
+            doc.deref(),
+            section_node,
+            &mut ctx,
+            0,
+            &[Some(abs_div_id)],
+            &mut out,
+        );
+
+        assert!(
+            !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
+            "non-static parent: abs slot must still produce a draw entry"
+        );
+    }
+
+    #[test]
+    fn walk_absolute_pseudo_children_fixed_slot_takes_fixed_cb_branch() {
+        // position:fixed pseudo → cb_fixed branch → resolve_cb_for_absolute
+        // with is_fixed=true (climbs the full tree without stopping at
+        // non-static ancestors).
+        let mut doc = crate::blitz_adapter::parse_and_layout(
+            r#"<!doctype html><html><body>
+              <section style="position:relative;width:200px;height:300px;">
+                <div style="position:fixed;width:10px;height:10px;">fixed</div>
+              </section>
+            </body></html>"#,
+            595.0,
+            842.0,
+            &[],
+            false,
+        );
+        let section_id = find_tag(&doc, "section");
+        let fixed_div_id = find_tag(&doc, "div");
+        let running_store = RunningElementStore::new();
+        let mut ctx = make_ctx(&mut doc, &running_store);
+        let mut out = crate::drawables::Drawables::new();
+
+        let section_node = doc.get_node(section_id).unwrap();
+
+        // is_position_fixed(pseudo)=true → cb_fixed branch
+        walk_absolute_pseudo_children(
+            doc.deref(),
+            section_node,
+            &mut ctx,
+            0,
+            &[Some(fixed_div_id)],
+            &mut out,
+        );
+
+        assert!(
+            !out.block_styles.is_empty() || !out.paragraphs.is_empty(),
+            "fixed slot must produce a draw entry via convert_node fallback"
         );
     }
 }
