@@ -60,6 +60,11 @@ impl TextDecoration {
 }
 
 /// A pre-extracted glyph for rendering via Krilla.
+///
+/// `text_range` is the byte range in the original text that this glyph's
+/// cluster represents. All glyphs belonging to the same cluster (e.g. a
+/// ligature) share the same range — this is the correct PDF convention and
+/// avoids splitting UTF-8 character boundaries.
 #[derive(Clone, Debug)]
 pub struct ShapedGlyph {
     pub id: u32,

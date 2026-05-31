@@ -65,7 +65,7 @@ endobj
 
 6 0 obj
 <<
-  /Length 741
+  /Length 816
   /Type /CMap
   /WMode 0
 >>
@@ -92,9 +92,22 @@ end def
 1 begincodespacerange
 <0000> <FFFF>
 endcodespacerange
-2 beginbfchar
-<0001> <00430068006100700074006500720020004F006E0065>
-<000B> <0053006F006D006500200063006F006E00740065006E007400200068006500720065002E>
+15 beginbfchar
+<0001> <0043>
+<0002> <0068>
+<0003> <0061>
+<0004> <0070>
+<0005> <0074>
+<0006> <0065>
+<0007> <0072>
+<0008> <0020>
+<0009> <004F>
+<000A> <006E>
+<000B> <0053>
+<000C> <006F>
+<000D> <006D>
+<000E> <0063>
+<000F> <002E>
 endbfchar
 endcmap
 CMapName currentdict /CMap defineresource pop
@@ -183,49 +196,37 @@ endobj
 
 9 0 obj
 <<
-  /Length 737
+  /Length 586
 >>
 stream
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (Chapter One)
->> BDC
 0 Tr
 /f0 24 Tf
 1 0 0 -1 62.692913 95.69292 Tm
 [(\000\001\000\002\000\003\000\004\000\005\000\006\000\007\000\b\000\t\000\n\000\006)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (Some content here.)
->> BDC
 0 Tr
 /f0 12 Tf
 1 0 0 -1 62.692913 128.69292 Tm
 [(\000\013\000\f\000\r\000\006\000\b\000\016\000\f\000\n\000\005\000\006\000\n\000\005\000\b\000\002\000\006\000\007) 19.999786 (\000\006\000\017)] TJ
-EMC
 ET
 Q
 q
 1 0 0 -1 0 841.89 cm
 0 0 0 rg
 BT
-/Span <<
-  /ActualText (Chapter One)
->> BDC
 0 Tr
 /f0 12 Tf
 1 0 0 -1 56.692913 11.25 Tm
 [(\000\001\000\002\000\003\000\004\000\005\000\006\000\007\000\b\000\t\000\n\000\006)] TJ
-EMC
 ET
 Q
 endstream
@@ -244,7 +245,7 @@ endobj
   /Subtype /XML
 >>
 stream
-<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="xmp-writer"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"  xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"  xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/"  xmlns:pdf="http://ns.adobe.com/pdf/1.3/" ><pdf:Producer>fulgur</pdf:Producer><xmpTPg:NPages>1</xmpTPg:NPages><dc:format>application/pdf</dc:format><xmpMM:InstanceID>MswAbKvZAXv0eYX96QcMpA==</xmpMM:InstanceID><xmpMM:DocumentID>MswAbKvZAXv0eYX96QcMpA==</xmpMM:DocumentID><xmpMM:RenditionClass>proof</xmpMM:RenditionClass><pdf:PDFVersion>1.7</pdf:PDFVersion></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="r"?>
+<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="xmp-writer"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"  xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"  xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/"  xmlns:pdf="http://ns.adobe.com/pdf/1.3/" ><pdf:Producer>fulgur</pdf:Producer><xmpTPg:NPages>1</xmpTPg:NPages><dc:format>application/pdf</dc:format><xmpMM:InstanceID>ljoGE70PvntA5v6KUIE51w==</xmpMM:InstanceID><xmpMM:DocumentID>ljoGE70PvntA5v6KUIE51w==</xmpMM:DocumentID><xmpMM:RenditionClass>proof</xmpMM:RenditionClass><pdf:PDFVersion>1.7</pdf:PDFVersion></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="r"?>
 endstream
 endobj
 
@@ -265,19 +266,19 @@ xref
 0000000633 00000 n
 0000000747 00000 n
 0000000990 00000 n
-0000001810 00000 n
-0000005555 00000 n
-0000005756 00000 n
-0000006547 00000 n
-0000006591 00000 n
-0000007441 00000 n
+0000001885 00000 n
+0000005630 00000 n
+0000005831 00000 n
+0000006471 00000 n
+0000006515 00000 n
+0000007365 00000 n
 trailer
 <<
   /Size 13
   /Root 12 0 R
   /Info 10 0 R
-  /ID [(MswAbKvZAXv0eYX96QcMpA==) (MswAbKvZAXv0eYX96QcMpA==)]
+  /ID [(ljoGE70PvntA5v6KUIE51w==) (ljoGE70PvntA5v6KUIE51w==)]
 >>
 startxref
-7515
+7439
 %%EOF
