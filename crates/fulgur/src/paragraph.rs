@@ -1749,3 +1749,112 @@ mod text_decoration_tests {
         assert!(d.line.is_none());
     }
 }
+
+#[cfg(test)]
+mod decoration_metrics_real_font_tests {
+    use super::*;
+
+    const NOTO_SANS_REGULAR: &[u8] =
+        include_bytes!("../../../examples/.fonts/NotoSans-Regular.ttf");
+
+    /// Passing valid TTF bytes causes `skrifa::FontRef::from_index` to succeed,
+    /// executing the main branch of `get_decoration_metrics` rather than the
+    /// empty-data fallback that the existing tests exercise.
+    #[test]
+    fn real_font_enters_skrifa_main_branch() {
+        let m = get_decoration_metrics(NOTO_SANS_REGULAR, 0, 12.0);
+        assert!(
+            m.underline_offset > 0.0,
+            "underline_offset={}",
+            m.underline_offset
+        );
+        assert!(
+            m.underline_thickness > 0.0,
+            "underline_thickness={}",
+            m.underline_thickness
+        );
+        assert!(
+            m.strikethrough_offset > 0.0,
+            "strikethrough_offset={}",
+            m.strikethrough_offset
+        );
+        assert!(
+            m.strikethrough_thickness > 0.0,
+            "strikethrough_thickness={}",
+            m.strikethrough_thickness
+        );
+        assert!(m.overline_pos > 0.0, "overline_pos={}", m.overline_pos);
+    }
+
+    /// The minimum underline offset floor (`font_size * 0.075`) is enforced even
+    /// when the font's own OS/2 underline offset is smaller.
+    #[test]
+    fn real_font_underline_offset_meets_minimum() {
+        let font_size = 12.0_f32;
+        let m = get_decoration_metrics(NOTO_SANS_REGULAR, 0, font_size);
+        assert!(
+            m.underline_offset >= font_size * 0.075,
+            "expected >= {:.4}, got {:.4}",
+            font_size * 0.075,
+            m.underline_offset,
+        );
+    }
+
+    /// Both `underline_thickness` and `strikethrough_thickness` are clamped to
+    /// at least `font_size * 0.02` (guards against zero-thickness OS/2 entries).
+    #[test]
+    fn real_font_min_thickness_is_enforced() {
+        let font_size = 12.0_f32;
+        let min = font_size * 0.02;
+        let m = get_decoration_metrics(NOTO_SANS_REGULAR, 0, font_size);
+        assert!(
+            m.underline_thickness >= min,
+            "underline_thickness {:.4} < min {:.4}",
+            m.underline_thickness,
+            min,
+        );
+        assert!(
+            m.strikethrough_thickness >= min,
+            "strikethrough_thickness {:.4} < min {:.4}",
+            m.strikethrough_thickness,
+            min,
+        );
+    }
+
+    /// `strikethrough_offset = strikeout.offset.max(ascent * 0.35)`.
+    /// For any real font both operands are positive, so the result must be > 0.
+    #[test]
+    fn real_font_strikethrough_offset_is_positive() {
+        let m = get_decoration_metrics(NOTO_SANS_REGULAR, 0, 12.0);
+        assert!(
+            m.strikethrough_offset > 0.0,
+            "strikethrough_offset={}",
+            m.strikethrough_offset,
+        );
+    }
+
+    /// All offsets and thicknesses should grow when `font_size` doubles,
+    /// since they are derived from either font-metric fractions or explicit
+    /// `font_size` multiples.
+    #[test]
+    fn real_font_metrics_grow_with_font_size() {
+        let m1 = get_decoration_metrics(NOTO_SANS_REGULAR, 0, 12.0);
+        let m2 = get_decoration_metrics(NOTO_SANS_REGULAR, 0, 24.0);
+        assert!(
+            m2.underline_offset > m1.underline_offset,
+            "larger font_size should increase underline_offset"
+        );
+        assert!(
+            m2.underline_thickness > m1.underline_thickness,
+            "larger font_size should increase underline_thickness"
+        );
+        assert!(
+            m2.strikethrough_offset > m1.strikethrough_offset,
+            "larger font_size should increase strikethrough_offset"
+        );
+        assert!(
+            m2.overline_pos > m1.overline_pos,
+            "larger font_size should increase overline_pos"
+        );
+    }
+}
