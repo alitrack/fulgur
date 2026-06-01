@@ -1853,6 +1853,10 @@ mod decoration_metrics_real_font_tests {
             "larger font_size should increase strikethrough_offset"
         );
         assert!(
+            m2.strikethrough_thickness > m1.strikethrough_thickness,
+            "larger font_size should increase strikethrough_thickness"
+        );
+        assert!(
             m2.overline_pos > m1.overline_pos,
             "larger font_size should increase overline_pos"
         );
