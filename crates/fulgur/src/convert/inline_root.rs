@@ -680,6 +680,19 @@ mod tests {
         })
     }
 
+    /// Collect `computed_y` from every `Image` item in `items`.
+    /// Called with text-only lines (covering `_ => None`) and image lines
+    /// (covering the `Image` arm) so both arms are always exercised.
+    fn image_ys(items: &[LineItem]) -> Vec<f32> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::Image(img) => Some(img.computed_y),
+                _ => None,
+            })
+            .collect()
+    }
+
     // Expected fallback values from the `default` literal in `metrics_from_line`.
     const DEF_ASCENT: f32 = 12.0;
     const DEF_DESCENT: f32 = 4.0;
@@ -993,28 +1006,16 @@ mod tests {
         recalculate_paragraph_line_boxes(&mut lines);
 
         // Line 0 must expand.
-        assert!(
-            approx(lines[0].height, 24.0),
-            "line0 height={} (expected 24)",
-            lines[0].height
-        );
-        assert!(
-            approx(lines[0].baseline, 20.0),
-            "line0 baseline={} (expected 20)",
-            lines[0].baseline
-        );
+        let (h0, b0) = (lines[0].height, lines[0].baseline);
+        assert!(approx(h0, 24.0));
+        assert!(approx(b0, 20.0));
 
         // Line 1 height unchanged; baseline adjusted by new_y_acc=24 not 16.
-        assert!(
-            approx(lines[1].height, 12.0),
-            "line1 height={} (expected 12)",
-            lines[1].height
-        );
-        assert!(
-            approx(lines[1].baseline, 32.0),
-            "line1 baseline={} (expected 8 + new_y_acc 24 = 32)",
-            lines[1].baseline
-        );
+        let (h1, b1) = (lines[1].height, lines[1].baseline);
+        assert!(approx(h1, 12.0));
+        assert!(approx(b1, 32.0));
+        // Text-only line has no images; this call covers the `_ => None` arm of image_ys.
+        assert!(image_ys(&lines[1].items).is_empty());
     }
 
     /// Companion to the above: an image in line 1 must receive `new_y_acc=24`
@@ -1044,16 +1045,12 @@ mod tests {
         recalculate_paragraph_line_boxes(&mut lines);
 
         // Line 0: verify expansion occurred so the test is meaningful.
-        assert!(
-            approx(lines[0].height, 24.0),
-            "line0 height={}",
-            lines[0].height
-        );
+        let h0 = lines[0].height;
+        assert!(approx(h0, 24.0));
 
         // Line 1 image: computed_y = line-local img_top(4) + new_y_acc(24) = 28.
-        assert!(matches!(lines[1].items[0], LineItem::Image(_)));
-        if let LineItem::Image(img) = &lines[1].items[0] {
-            assert!(approx(img.computed_y, 28.0));
-        }
+        // image_ys covers the LineItem::Image arm; the _ => None arm is covered in
+        // recalculate_paragraph_line_boxes_expanding_line_shifts_subsequent_baseline.
+        assert!(approx(image_ys(&lines[1].items)[0], 28.0));
     }
 }
