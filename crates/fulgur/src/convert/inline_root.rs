@@ -680,6 +680,19 @@ mod tests {
         })
     }
 
+    /// Collect `computed_y` from every `Image` item in `items`.
+    /// Called with text-only lines (covering `_ => None`) and image lines
+    /// (covering the `Image` arm) so both arms are always exercised.
+    fn image_ys(items: &[LineItem]) -> Vec<f32> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::Image(img) => Some(img.computed_y),
+                _ => None,
+            })
+            .collect()
+    }
+
     // Expected fallback values from the `default` literal in `metrics_from_line`.
     const DEF_ASCENT: f32 = 12.0;
     const DEF_DESCENT: f32 = 4.0;
@@ -902,5 +915,142 @@ mod tests {
         } else {
             panic!("expected Image in line 1 at index 0");
         }
+    }
+
+    // ── metrics_from_line: happy path with real font bytes ─────────────────
+
+    /// Exercises the `Ok(font_ref)` branch of `metrics_from_line`: when the
+    /// text run carries valid TTF bytes, skrifa parses the font and returns
+    /// real metrics rather than the hard-coded fallback values.
+    ///
+    /// We only assert that the values are positive and that ascent is NOT
+    /// the fallback (12.0), which would indicate the font branch was entered.
+    #[test]
+    fn metrics_from_line_real_font_returns_font_metrics() {
+        const NOTO_SANS: &[u8] = include_bytes!("../../../../examples/.fonts/NotoSans-Regular.ttf");
+
+        let mut line = text_line(16.0, 12.0);
+        line.items.push(make_text_run(NOTO_SANS.to_vec()));
+        let m = metrics_from_line(&line);
+
+        // The real font branch was taken, so values differ from the fallback.
+        assert!(
+            m.ascent != DEF_ASCENT,
+            "expected real font ascent, got fallback 12.0"
+        );
+        assert!(m.ascent > 0.0, "ascent={}", m.ascent);
+        assert!(m.descent > 0.0, "descent={}", m.descent);
+        assert!(m.x_height > 0.0, "x_height={}", m.x_height);
+        // Derived fields follow ascent proportionally.
+        let expected_sub = m.ascent * 0.3;
+        let expected_sup = m.ascent * 0.4;
+        assert!(approx(m.subscript_offset, expected_sub));
+        assert!(approx(m.superscript_offset, expected_sup));
+    }
+
+    /// When multiple items precede the first valid-font text run, the function
+    /// must skip non-text items and continue to find the first parseable font.
+    #[test]
+    fn metrics_from_line_real_font_skips_non_text_items_before_it() {
+        const NOTO_SANS: &[u8] = include_bytes!("../../../../examples/.fonts/NotoSans-Regular.ttf");
+
+        let mut line = text_line(16.0, 12.0);
+        // image and inline-box come first, then a valid-font text run.
+        line.items
+            .push(make_image(5.0, 5.0, VerticalAlign::Baseline));
+        line.items.push(make_inline_box());
+        line.items.push(make_text_run(NOTO_SANS.to_vec()));
+        let m = metrics_from_line(&line);
+
+        assert!(m.ascent != DEF_ASCENT, "expected real font, got default");
+        assert!(m.ascent > 0.0, "ascent={}", m.ascent);
+    }
+
+    // ── recalculate_paragraph_line_boxes: divergent new_y_acc ─────────────
+
+    /// When a tall Baseline image causes line 0 to expand (height 16 → 24),
+    /// `new_y_acc` and `original_y_acc` diverge after line 0:
+    ///   original_y_acc = 16 (original height)
+    ///   new_y_acc      = 24 (expanded height)
+    ///
+    /// Line 1's baseline must be adjusted by `new_y_acc` (24), not
+    /// `original_y_acc` (16). Without this, subsequent text would land at
+    /// the wrong vertical position inside the expanded paragraph box.
+    ///
+    /// Setup (all values in PDF pt, default font metrics: ascent=12, descent=4):
+    ///   Line 0: height=16, para-relative baseline=12
+    ///           Baseline image height=20 → img_top = 12-20 = -8 < line_top(0)
+    ///           After recalculate_line_box: line_top=-8, height=24, baseline=20
+    ///   Line 1: height=12, para-relative baseline=24 (original line 0 height + 8)
+    ///           No images.
+    ///           Normalize:   baseline -= original_y_acc(16) → 24-16 = 8
+    ///           Recalculate: no change (text-only)
+    ///           De-normalize: baseline += new_y_acc(24)    → 8+24  = 32
+    #[test]
+    fn recalculate_paragraph_line_boxes_expanding_line_shifts_subsequent_baseline() {
+        let mut lines = vec![
+            {
+                // Line 0: tall Baseline image forces expansion.
+                let mut l = text_line(16.0, 12.0);
+                l.items.push(make_image(5.0, 20.0, VerticalAlign::Baseline));
+                l
+            },
+            {
+                // Line 1: text-only. Para-relative baseline = original line-0
+                // height (16) + line-local baseline (8) = 24.
+                let mut l = text_line(12.0, 24.0);
+                l.items.push(make_text_run(vec![]));
+                l
+            },
+        ];
+        recalculate_paragraph_line_boxes(&mut lines);
+
+        // Line 0 must expand.
+        let (h0, b0) = (lines[0].height, lines[0].baseline);
+        assert!(approx(h0, 24.0));
+        assert!(approx(b0, 20.0));
+
+        // Line 1 height unchanged; baseline adjusted by new_y_acc=24 not 16.
+        let (h1, b1) = (lines[1].height, lines[1].baseline);
+        assert!(approx(h1, 12.0));
+        assert!(approx(b1, 32.0));
+        // Text-only line has no images; this call covers the `_ => None` arm of image_ys.
+        assert!(image_ys(&lines[1].items).is_empty());
+    }
+
+    /// Companion to the above: an image in line 1 must receive `new_y_acc=24`
+    /// (the expanded first-line height) as its paragraph-offset, not the
+    /// original 16. This exercises `img.computed_y += new_y_acc` when
+    /// `new_y_acc != original_y_acc`.
+    ///
+    /// Line 1: height=12, baseline=24 (para-relative), image height=4 (Baseline).
+    ///   Normalize baseline: 24-16=8
+    ///   img_top = 8-4=4, img_bottom=8 → within [0,12), no expansion.
+    ///   img.computed_y = 4, then += new_y_acc(24) → 28.
+    #[test]
+    fn recalculate_paragraph_line_boxes_image_in_second_line_uses_expanded_new_y_acc() {
+        let mut lines = vec![
+            {
+                let mut l = text_line(16.0, 12.0);
+                l.items.push(make_image(5.0, 20.0, VerticalAlign::Baseline));
+                l
+            },
+            {
+                // Line 1 has a small Baseline image (height=4).
+                let mut l = text_line(12.0, 24.0);
+                l.items.push(make_image(5.0, 4.0, VerticalAlign::Baseline));
+                l
+            },
+        ];
+        recalculate_paragraph_line_boxes(&mut lines);
+
+        // Line 0: verify expansion occurred so the test is meaningful.
+        let h0 = lines[0].height;
+        assert!(approx(h0, 24.0));
+
+        // Line 1 image: computed_y = line-local img_top(4) + new_y_acc(24) = 28.
+        // image_ys covers the LineItem::Image arm; the _ => None arm is covered in
+        // recalculate_paragraph_line_boxes_expanding_line_shifts_subsequent_baseline.
+        assert!(approx(image_ys(&lines[1].items)[0], 28.0));
     }
 }
