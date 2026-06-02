@@ -928,19 +928,11 @@ mod tests {
         assert!(m.ascent > 0.0, "ascent={}", m.ascent);
         assert!(m.descent > 0.0, "descent={}", m.descent);
         assert!(m.x_height > 0.0, "x_height={}", m.x_height);
-        // Derived fields follow ascent.
-        assert!(
-            approx(m.subscript_offset, m.ascent * 0.3),
-            "subscript_offset={} ascent={}",
-            m.subscript_offset,
-            m.ascent
-        );
-        assert!(
-            approx(m.superscript_offset, m.ascent * 0.4),
-            "superscript_offset={} ascent={}",
-            m.superscript_offset,
-            m.ascent
-        );
+        // Derived fields follow ascent proportionally.
+        let expected_sub = m.ascent * 0.3;
+        let expected_sup = m.ascent * 0.4;
+        assert!(approx(m.subscript_offset, expected_sub));
+        assert!(approx(m.superscript_offset, expected_sup));
     }
 
     /// When multiple items precede the first valid-font text run, the function
@@ -1059,14 +1051,9 @@ mod tests {
         );
 
         // Line 1 image: computed_y = line-local img_top(4) + new_y_acc(24) = 28.
+        assert!(matches!(lines[1].items[0], LineItem::Image(_)));
         if let LineItem::Image(img) = &lines[1].items[0] {
-            assert!(
-                approx(img.computed_y, 28.0),
-                "computed_y={} (expected 28 = img_top 4 + new_y_acc 24)",
-                img.computed_y
-            );
-        } else {
-            panic!("expected Image in line 1 at index 0");
+            assert!(approx(img.computed_y, 28.0));
         }
     }
 }
