@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.17.0] - 2026-06-02
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+### Features
+* feat(gcpm): cascade-safe capture of pseudo content for target-text by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/425
+### Bug Fixes
+* fix(gcpm): render all items of multi-item element pseudo content by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/431
+* fix(pagination): slice tall in-flow body-direct children across pages by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/422
+* fix(gcpm): out-specify surviving author rules in CounterPass injection by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/434
+* fix(pdf): assign per-cluster text_range so PDF text selection works by @Fxlr8 in https://github.com/fulgur-rs/fulgur/pull/442
+### Documentation
+* docs+config(beads): modernize for bd 1.0.3 (bd dolt push, sync.remote) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/449
+
+## New Contributors
+* @Fxlr8 made their first contribution in https://github.com/fulgur-rs/fulgur/pull/442
+
+**Full Changelog**: https://github.com/fulgur-rs/fulgur/compare/v0.16.0...v0.17.0
+
 ## [0.16.0] - 2026-05-13
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
