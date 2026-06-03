@@ -903,3 +903,189 @@ mod tests {
         assert_eq!(out.paragraphs[&5].lines[0].items.len(), 2);
     }
 }
+
+/// Integration-level tests that exercise `try_convert` and
+/// `build_list_item_body` through the full Blitz pipeline. These tests
+/// mirror the `semantics_tests` pattern in `convert/mod.rs`: they call
+/// `parse_and_layout` + `dom_to_drawables` directly and assert on the
+/// shape of the resulting `Drawables`.
+///
+/// The goal is to cover the `try_convert` branches (outside-marker,
+/// inside-marker) and the `build_list_item_body` paths that can only be
+/// exercised through a live DOM — all of which are unreachable from the
+/// pure-unit tests above.
+#[cfg(test)]
+mod blitz_convert_tests {
+    use crate::convert::{ConvertContext, dom_to_drawables};
+    use crate::drawables::ListItemMarker;
+    use std::ops::DerefMut;
+
+    /// Construct `Drawables` from an HTML string using a minimal engine-like
+    /// pipeline. Mirrors `semantics_tests::build_drawables`.
+    fn build_drawables(html: &str) -> crate::drawables::Drawables {
+        let mut doc = crate::blitz_adapter::parse_and_layout(html, 595.0, 842.0, &[], true);
+        let column_styles = crate::blitz_adapter::extract_column_style_table(&doc);
+        let multicol_geometry = crate::multicol_layout::run_pass(doc.deref_mut(), &column_styles);
+        let pagination_geometry = crate::pagination_layout::run_pass(doc.deref_mut(), 842.0);
+        let running_store = crate::gcpm::running::RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &running_store,
+            assets: None,
+            font_cache: Default::default(),
+            string_set_by_node: Default::default(),
+            counter_ops_by_node: Default::default(),
+            bookmark_by_node: Default::default(),
+            column_styles,
+            multicol_geometry,
+            pagination_geometry,
+            link_cache: Default::default(),
+            viewport_size_px: Some((595.0, 842.0)),
+        };
+        dom_to_drawables(&doc, &mut ctx)
+    }
+
+    // ── Outside-marker path (first branch of `try_convert`) ──────────────────
+
+    /// Standard `<ol><li>` uses the outside-marker layout path. After
+    /// `dom_to_drawables` the `list_items` map must contain at least one
+    /// entry for the `<li>` node (exercises `try_convert` lines 22–66).
+    #[test]
+    fn outside_marker_ol_li_populates_list_items_map() {
+        let d = build_drawables("<!DOCTYPE html><html><body><ol><li>item</li></ol></body></html>");
+        assert!(
+            !d.list_items.is_empty(),
+            "outside-marker <li> must produce at least one list_items entry"
+        );
+    }
+
+    /// For every entry in `list_items`, `try_convert` also inserts a
+    /// matching `BlockEntry`. This invariant is required by the render pass
+    /// which looks up both maps by the same NodeId.
+    #[test]
+    fn outside_marker_li_block_entry_accompanies_list_item_entry() {
+        let d =
+            build_drawables("<!DOCTYPE html><html><body><ul><li>bullet</li></ul></body></html>");
+        for node_id in d.list_items.keys() {
+            assert!(
+                d.block_styles.contains_key(node_id),
+                "node {} in list_items must have a matching block_styles entry",
+                node_id
+            );
+        }
+    }
+
+    /// The marker produced for a `<ul><li>` should be a `Text` marker
+    /// with at least one shaped line (the bullet glyph), or an `Image`
+    /// marker — but never an empty `Text { lines: [] }`.
+    #[test]
+    fn outside_marker_li_has_non_empty_marker() {
+        let d = build_drawables("<!DOCTYPE html><html><body><ul><li>text</li></ul></body></html>");
+        for entry in d.list_items.values() {
+            let valid = match &entry.marker {
+                ListItemMarker::Text { lines, .. } => !lines.is_empty(),
+                ListItemMarker::Image { .. } => true,
+                ListItemMarker::None => false,
+            };
+            assert!(
+                valid,
+                "list item marker must not be an empty Text{{lines:[]}} or None"
+            );
+        }
+    }
+
+    /// Three `<li>` elements inside a single `<ol>` must each produce an
+    /// independent `ListItemEntry` so the render pass can paint them
+    /// separately (exercises the loop in `dom_to_drawables` → `convert_node`).
+    #[test]
+    fn multiple_outside_li_elements_produce_one_entry_each() {
+        let d = build_drawables(
+            "<!DOCTYPE html><html><body><ol><li>a</li><li>b</li><li>c</li></ol></body></html>",
+        );
+        assert!(
+            d.list_items.len() >= 3,
+            "three <li> elements must produce at least 3 list_items entries, got {}",
+            d.list_items.len()
+        );
+    }
+
+    // ── Inside-marker path (third branch of `try_convert`) ───────────────────
+
+    /// `list-style-position: inside` causes Blitz to use
+    /// `ListItemLayoutPosition::Inside`, routing `try_convert` into the
+    /// inside-marker branch (lines 122–273). A `BlockEntry` must be created
+    /// for the `<li>` node.
+    #[test]
+    fn inside_positioned_li_registers_block_entry() {
+        let d = build_drawables(concat!(
+            "<!DOCTYPE html><html><body>",
+            "<ol style=\"list-style-position:inside\"><li>item</li></ol>",
+            "</body></html>",
+        ));
+        assert!(
+            !d.block_styles.is_empty(),
+            "inside-marker <li> must register a block_styles entry"
+        );
+    }
+
+    /// When `<li>text</li>` has inline text content AND `list-style-position:
+    /// inside`, `build_list_item_body` walks the children which eventually
+    /// produce at least one paragraph entry.
+    #[test]
+    fn inside_positioned_li_with_text_produces_paragraph_entry() {
+        let d = build_drawables(concat!(
+            "<!DOCTYPE html><html><body>",
+            "<ol style=\"list-style-position:inside\"><li>hello world</li></ol>",
+            "</body></html>",
+        ));
+        assert!(
+            !d.paragraphs.is_empty(),
+            "inside-marker <li> with text content must produce at least one paragraph entry"
+        );
+    }
+
+    // ── `build_list_item_body` — non-inline-root else branch ─────────────────
+
+    /// A `<li>` whose direct child is a block element (`<div>`) is NOT an
+    /// inline root itself. `build_list_item_body` enters its else branch
+    /// (lines 424–428) and walks the children, which in turn produces entries
+    /// for the nested block. The `<li>` node must still get a `block_styles`
+    /// entry from the outside-marker path in `try_convert`.
+    #[test]
+    fn outside_marker_li_with_block_child_registers_entries() {
+        let d = build_drawables(concat!(
+            "<!DOCTYPE html><html><body>",
+            "<ul><li><div>block child text</div></li></ul>",
+            "</body></html>",
+        ));
+        assert!(
+            !d.list_items.is_empty(),
+            "<li> with block child must still register a list_items entry"
+        );
+        for node_id in d.list_items.keys() {
+            assert!(
+                d.block_styles.contains_key(node_id),
+                "node {} must have a block_styles entry even when <li> has block children",
+                node_id
+            );
+        }
+    }
+
+    // ── Nested lists ──────────────────────────────────────────────────────────
+
+    /// Nested `<ul><li><ul><li>…` triggers `try_convert` recursively for
+    /// both list levels. Both outer and inner `<li>` nodes must appear in
+    /// `list_items`.
+    #[test]
+    fn nested_lists_produce_entries_for_each_level() {
+        let d = build_drawables(concat!(
+            "<!DOCTYPE html><html><body>",
+            "<ul><li>outer<ul><li>inner</li></ul></li></ul>",
+            "</body></html>",
+        ));
+        assert!(
+            d.list_items.len() >= 2,
+            "nested lists must produce at least 2 list_items entries (one per level), got {}",
+            d.list_items.len()
+        );
+    }
+}
