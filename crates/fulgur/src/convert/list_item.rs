@@ -967,25 +967,7 @@ mod blitz_convert_tests {
     /// Construct `Drawables` from an HTML string using a minimal engine-like
     /// pipeline. Mirrors `semantics_tests::build_drawables`.
     fn build_drawables(html: &str) -> crate::drawables::Drawables {
-        let mut doc = crate::blitz_adapter::parse_and_layout(html, 595.0, 842.0, &[], true);
-        let column_styles = crate::blitz_adapter::extract_column_style_table(&doc);
-        let multicol_geometry = crate::multicol_layout::run_pass(doc.deref_mut(), &column_styles);
-        let pagination_geometry = crate::pagination_layout::run_pass(doc.deref_mut(), 842.0);
-        let running_store = crate::gcpm::running::RunningElementStore::new();
-        let mut ctx = ConvertContext {
-            running_store: &running_store,
-            assets: None,
-            font_cache: Default::default(),
-            string_set_by_node: Default::default(),
-            counter_ops_by_node: Default::default(),
-            bookmark_by_node: Default::default(),
-            column_styles,
-            multicol_geometry,
-            pagination_geometry,
-            link_cache: Default::default(),
-            viewport_size_px: Some((595.0, 842.0)),
-        };
-        dom_to_drawables(&doc, &mut ctx)
+        build_drawables_with_fonts(html, &[], true)
     }
 
     // ── Outside-marker path (first branch of `try_convert`) ──────────────────
