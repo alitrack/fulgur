@@ -916,9 +916,53 @@ mod tests {
 /// pure-unit tests above.
 #[cfg(test)]
 mod blitz_convert_tests {
+    use crate::asset::AssetBundle;
     use crate::convert::{ConvertContext, dom_to_drawables};
     use crate::drawables::ListItemMarker;
     use std::ops::DerefMut;
+    use std::sync::Arc;
+
+    /// Load NotoSans-Regular WOFF2 from the test fixtures and decode to TTF
+    /// bytes. Used to supply a deterministic font that covers U+2022 (bullet).
+    fn load_noto_sans_ttf() -> Arc<Vec<u8>> {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fonts/NotoSans-Regular.woff2");
+        let woff2 =
+            std::fs::read(&fixture).expect("NotoSans-Regular.woff2 missing from test fixtures");
+        let mut bundle = AssetBundle::new();
+        bundle.add_font_bytes(woff2).expect("WOFF2 decode failed");
+        Arc::clone(&bundle.fonts[0])
+    }
+
+    /// Construct `Drawables` from an HTML string with explicit font data and
+    /// `system_fonts` flag. Use this for tests that inspect marker content to
+    /// avoid depending on the host's installed fonts.
+    fn build_drawables_with_fonts(
+        html: &str,
+        font_data: &[Arc<Vec<u8>>],
+        system_fonts: bool,
+    ) -> crate::drawables::Drawables {
+        let mut doc =
+            crate::blitz_adapter::parse_and_layout(html, 595.0, 842.0, font_data, system_fonts);
+        let column_styles = crate::blitz_adapter::extract_column_style_table(&doc);
+        let multicol_geometry = crate::multicol_layout::run_pass(doc.deref_mut(), &column_styles);
+        let pagination_geometry = crate::pagination_layout::run_pass(doc.deref_mut(), 842.0);
+        let running_store = crate::gcpm::running::RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &running_store,
+            assets: None,
+            font_cache: Default::default(),
+            string_set_by_node: Default::default(),
+            counter_ops_by_node: Default::default(),
+            bookmark_by_node: Default::default(),
+            column_styles,
+            multicol_geometry,
+            pagination_geometry,
+            link_cache: Default::default(),
+            viewport_size_px: Some((595.0, 842.0)),
+        };
+        dom_to_drawables(&doc, &mut ctx)
+    }
 
     /// Construct `Drawables` from an HTML string using a minimal engine-like
     /// pipeline. Mirrors `semantics_tests::build_drawables`.
@@ -977,10 +1021,16 @@ mod blitz_convert_tests {
 
     /// The marker produced for a `<ul><li>` should be a `Text` marker
     /// with at least one shaped line (the bullet glyph), or an `Image`
-    /// marker — but never an empty `Text { lines: [] }`.
+    /// marker — but never an empty `Text { lines: [] }`. Uses bundled
+    /// NotoSans so the result is environment-independent.
     #[test]
     fn outside_marker_li_has_non_empty_marker() {
-        let d = build_drawables("<!DOCTYPE html><html><body><ul><li>text</li></ul></body></html>");
+        let font = load_noto_sans_ttf();
+        let d = build_drawables_with_fonts(
+            "<!DOCTYPE html><html><body><ul><li>text</li></ul></body></html>",
+            &[font],
+            false,
+        );
         assert!(!d.list_items.is_empty(), "list_items must not be empty");
         for entry in d.list_items.values() {
             let valid = match &entry.marker {
