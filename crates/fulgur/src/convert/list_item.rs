@@ -965,6 +965,7 @@ mod blitz_convert_tests {
     fn outside_marker_li_block_entry_accompanies_list_item_entry() {
         let d =
             build_drawables("<!DOCTYPE html><html><body><ul><li>bullet</li></ul></body></html>");
+        assert!(!d.list_items.is_empty(), "list_items must not be empty");
         for node_id in d.list_items.keys() {
             assert!(
                 d.block_styles.contains_key(node_id),
@@ -980,6 +981,7 @@ mod blitz_convert_tests {
     #[test]
     fn outside_marker_li_has_non_empty_marker() {
         let d = build_drawables("<!DOCTYPE html><html><body><ul><li>text</li></ul></body></html>");
+        assert!(!d.list_items.is_empty(), "list_items must not be empty");
         for entry in d.list_items.values() {
             let valid = match &entry.marker {
                 ListItemMarker::Text { lines, .. } => !lines.is_empty(),
@@ -1022,8 +1024,9 @@ mod blitz_convert_tests {
             "</body></html>",
         ));
         assert!(
-            !d.block_styles.is_empty(),
-            "inside-marker <li> must register a block_styles entry"
+            d.block_styles.len() >= 3,
+            "expected at least 3 block styles (html, body, li), got {}",
+            d.block_styles.len()
         );
     }
 
