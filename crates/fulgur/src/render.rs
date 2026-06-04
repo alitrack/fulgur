@@ -5296,7 +5296,7 @@ mod smoke_tests {
     #[test]
     fn smoke_multicolumn() {
         assert!(
-            !render(r#"<div style="column-count: 2">alpha beta gamma delta epsilon zeta</div>"#)
+            !render(r#"<div style="column-count: 2; width: 50pt">alpha beta gamma delta epsilon zeta</div>"#)
                 .is_empty()
         );
     }
@@ -5305,7 +5305,7 @@ mod smoke_tests {
     fn smoke_multicolumn_with_rule() {
         assert!(
             !render(
-                r#"<div style="column-count: 2; column-rule: 2px solid black">
+                r#"<div style="column-count: 2; column-rule: 2px solid black; width: 50pt">
                 alpha beta gamma delta
             </div>"#
             )
