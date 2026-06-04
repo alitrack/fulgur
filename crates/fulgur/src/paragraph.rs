@@ -1319,6 +1319,18 @@ mod tests {
     }
 
     #[test]
+    fn paragraph_with_node_id_stores_value() {
+        let p = ParagraphRender::new(Vec::new()).with_node_id(Some(42));
+        assert_eq!(p.node_id, Some(42));
+    }
+
+    #[test]
+    fn paragraph_with_node_id_none_stores_none() {
+        let p = ParagraphRender::new(Vec::new()).with_node_id(None);
+        assert_eq!(p.node_id, None);
+    }
+
+    #[test]
     fn line_item_inline_box_variant_can_be_constructed() {
         let item = LineItem::InlineBox(InlineBoxItem {
             node_id: Some(42),
