@@ -1510,13 +1510,14 @@ fn clear_subtree_cache_inner(doc: &mut BaseDocument, node_id: usize, depth: usiz
     if depth >= crate::MAX_DOM_DEPTH {
         return;
     }
-    let children: Vec<usize> = doc
-        .get_node(node_id)
-        .map(|n| n.children.clone())
-        .unwrap_or_default();
-    if let Some(node) = doc.get_node_mut(node_id) {
+    // Single lookup: clear this node's cache and clone its children in one
+    // `get_node_mut`, bailing early when the node is absent.
+    let children = if let Some(node) = doc.get_node_mut(node_id) {
         node.cache.clear();
-    }
+        node.children.clone()
+    } else {
+        return;
+    };
     for child_id in children {
         clear_subtree_cache_inner(doc, child_id, depth + 1);
     }
