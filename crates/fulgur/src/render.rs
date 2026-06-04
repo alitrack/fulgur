@@ -5326,4 +5326,125 @@ mod tests {
         assert_eq!(tree.children.len(), 1, "one root Group");
         assert!(matches!(tree.children[0], Node::Group(_)));
     }
+
+    // --- decode_image_for_v2: Jpeg and Gif format branches ---
+
+    fn make_image_entry(
+        format: crate::image::ImageFormat,
+        data: Vec<u8>,
+    ) -> crate::drawables::ImageEntry {
+        crate::drawables::ImageEntry {
+            image_data: Arc::new(data),
+            format,
+            width: 10.0,
+            height: 10.0,
+            opacity: 1.0,
+            visible: true,
+        }
+    }
+
+    #[test]
+    fn decode_image_for_v2_jpeg_invalid_data_returns_none() {
+        let entry = make_image_entry(crate::image::ImageFormat::Jpeg, vec![0xFF, 0xD8, 0xFF]);
+        let result = decode_image_for_v2(&entry);
+        assert!(result.is_none(), "invalid JPEG bytes should return None");
+    }
+
+    #[test]
+    fn decode_image_for_v2_gif_invalid_data_returns_none() {
+        let entry = make_image_entry(crate::image::ImageFormat::Gif, b"GIF89a".to_vec());
+        let result = decode_image_for_v2(&entry);
+        assert!(result.is_none(), "invalid GIF bytes should return None");
+    }
+
+    // --- MarginBoxRenderer::new: non-empty GCPM mapping branches ---
+
+    fn empty_geometry() -> crate::pagination_layout::PaginationGeometryTable {
+        BTreeMap::new()
+    }
+
+    #[test]
+    fn margin_box_renderer_new_with_string_set_mappings_takes_else_branch() {
+        // Non-empty string_set_mappings forces the else branch at
+        // `collect_string_set_states(pagination_geometry, &by_node_btree)`.
+        let gcpm = crate::gcpm::GcpmContext {
+            string_set_mappings: vec![crate::gcpm::StringSetMapping {
+                parsed: crate::gcpm::ParsedSelector::Class("hd".to_string()),
+                name: "chapter".to_string(),
+                values: vec![crate::gcpm::StringSetValue::ContentText],
+            }],
+            ..Default::default()
+        };
+        let store = RunningElementStore::default();
+        let geom = empty_geometry();
+        let implicit: BTreeMap<usize, String> = BTreeMap::new();
+        let _mbr = MarginBoxRenderer::new(
+            &gcpm,
+            &store,
+            &[],
+            false,
+            &geom,
+            &HashMap::new(),
+            &BTreeMap::new(),
+            1,
+            &implicit,
+        );
+    }
+
+    #[test]
+    fn margin_box_renderer_new_with_running_mappings_takes_else_branch() {
+        // Non-empty running_mappings forces the else branch at
+        // `collect_running_element_states(pagination_geometry, running_store)`.
+        let gcpm = crate::gcpm::GcpmContext {
+            running_mappings: vec![crate::gcpm::RunningMapping {
+                parsed: crate::gcpm::ParsedSelector::Class("hd".to_string()),
+                running_name: "header".to_string(),
+            }],
+            ..Default::default()
+        };
+        let store = RunningElementStore::default();
+        let geom = empty_geometry();
+        let implicit: BTreeMap<usize, String> = BTreeMap::new();
+        let _mbr = MarginBoxRenderer::new(
+            &gcpm,
+            &store,
+            &[],
+            false,
+            &geom,
+            &HashMap::new(),
+            &BTreeMap::new(),
+            1,
+            &implicit,
+        );
+    }
+
+    #[test]
+    fn margin_box_renderer_new_with_counter_mappings_takes_else_branch() {
+        // Non-empty counter_mappings forces the else branch at
+        // `collect_counter_states(pagination_geometry, counter_ops_by_node)`.
+        let gcpm = crate::gcpm::GcpmContext {
+            counter_mappings: vec![crate::gcpm::CounterMapping {
+                parsed: crate::gcpm::ParsedSelector::Tag("h1".to_string()),
+                ops: vec![crate::gcpm::CounterOp::Reset {
+                    name: "chapter".to_string(),
+                    value: 0,
+                }],
+            }],
+            ..Default::default()
+        };
+        let store = RunningElementStore::default();
+        let geom = empty_geometry();
+        let implicit: BTreeMap<usize, String> = BTreeMap::new();
+        let _mbr = MarginBoxRenderer::new(
+            &gcpm,
+            &store,
+            &[],
+            false,
+            &geom,
+            &HashMap::new(),
+            &BTreeMap::new(),
+            1,
+            &implicit,
+        );
+    }
 }
