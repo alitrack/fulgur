@@ -4234,3 +4234,46 @@ body { font-family: 'Noto Sans', sans-serif; }
          extracted text: {text:?}"
     );
 }
+
+/// Exercises `clear_subtree_cache` for codecov coverage.
+///
+/// The real regression guard for this bug (stale Taffy cache hits in multicol)
+/// is the VRT golden at `crates/fulgur-vrt/fixtures/layout/multicol-table-width.html`.
+/// The `build_drawables_for_testing_no_gcpm` path does not reproduce the width
+/// overflow (the stale-hit requires the full blitz initial layout + GCPM path),
+/// so this test only verifies that multicol+table rendering completes without
+/// panic and produces drawables.
+#[test]
+fn multicol_table_with_text_content_renders() {
+    // Matches the VRT fixture layout/multicol-table-width.html.
+    let html = r#"<!DOCTYPE html>
+<html><head><style>
+  @page { size: A4; margin: 12mm; }
+  body { font-family: sans-serif; font-size: 10pt; }
+  .cols { column-count: 2; column-gap: 10mm; }
+  .panel { break-inside: avoid; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border: 1px solid #333; padding: 2px 4px; }
+  th.title { background: #cfe0f0; }
+  td.name { width: 40%; }
+  td.ref  { width: 22%; }
+  td.val  { width: 20%; text-align: right; }
+  td.judg { width: 18%; }
+</style></head><body>
+<div class="cols">
+  <div class="panel"><table>
+    <tr><th class="title" colspan="4">Panel A</th></tr>
+    <tr><td class="name">height</td><td class="ref"></td><td class="val">169.2</td><td class="judg"></td></tr>
+    <tr><td class="name">BMI</td><td class="ref">18.5-24.9</td><td class="val">23.1</td><td class="judg">A</td></tr>
+  </table></div>
+  <div class="panel"><table>
+    <tr><th class="title" colspan="4">Panel B</th></tr>
+    <tr><td class="name">WBC</td><td class="ref">39-98</td><td class="val">56.0</td><td class="judg"></td></tr>
+    <tr><td class="name">RBC</td><td class="ref">427-570</td><td class="val">509</td><td class="judg"></td></tr>
+  </table></div>
+</div>
+</body></html>"#;
+    let engine = Engine::builder().build();
+    let pdf = engine.render_html(html).expect("render must not fail");
+    assert!(!pdf.is_empty());
+}

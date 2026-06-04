@@ -68,6 +68,9 @@ path = "layout/multicol-balance.html"
 margin_pt = 0.0
 
 [[fixture]]
+path = "layout/multicol-table-width.html"
+
+[[fixture]]
 path = "layout/overflow-hidden.html"
 margin_pt = 0.0
 

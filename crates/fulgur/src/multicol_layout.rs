@@ -282,6 +282,7 @@ impl<'a> FulgurLayoutTree<'a> {
                 width: AvailableSpace::Definite(prior.width),
                 height: AvailableSpace::Definite(prior.height.max(1.0)),
             };
+            clear_subtree_cache(self.doc, *id);
             taffy::compute_root_layout(self, node_id, available_space);
             taffy::round_layout(self, node_id);
 
@@ -1496,6 +1497,30 @@ fn fits_in_n_columns(measured: &[(NodeId, Size<f32>)], n: u32, budget: f32) -> b
         col_y += size.height;
     }
     true
+}
+
+/// Recursively clear Taffy's layout cache for `node_id` and all its DOM
+/// descendants. Depth is bounded by `MAX_DOM_DEPTH` to match the rest of
+/// the DOM-walking helpers in this module.
+fn clear_subtree_cache(doc: &mut BaseDocument, node_id: usize) {
+    clear_subtree_cache_inner(doc, node_id, 0);
+}
+
+fn clear_subtree_cache_inner(doc: &mut BaseDocument, node_id: usize, depth: usize) {
+    if depth >= crate::MAX_DOM_DEPTH {
+        return;
+    }
+    // Single lookup: clear this node's cache and clone its children in one
+    // `get_node_mut`, bailing early when the node is absent.
+    let children = if let Some(node) = doc.get_node_mut(node_id) {
+        node.cache.clear();
+        node.children.clone()
+    } else {
+        return;
+    };
+    for child_id in children {
+        clear_subtree_cache_inner(doc, child_id, depth + 1);
+    }
 }
 
 /// After a multicol subtree has been re-laid-out with a new height,

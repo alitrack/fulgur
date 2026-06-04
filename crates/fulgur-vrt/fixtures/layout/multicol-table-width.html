@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>VRT fixture: layout/multicol-table-width</title>
+    <style>
+      @page { size: A4; margin: 12mm; }
+      body { font-family: sans-serif; font-size: 10pt; }
+
+      /* Two-column layout via CSS multi-column */
+      .cols { column-count: 2; column-gap: 10mm; }
+      .panel { break-inside: avoid; margin-bottom: 8px; }
+
+      /* Each panel is a full-width table with per-column td widths */
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border: 1px solid #333; padding: 2px 4px; }
+      th.title { background: #cfe0f0; }
+      td.name { width: 40%; }
+      td.ref  { width: 22%; }
+      td.val  { width: 20%; text-align: right; }
+      td.judg { width: 18%; }
+    </style>
+  </head>
+  <body>
+    <h3>multicol: table{width:100%} with per-column td widths</h3>
+    <div class="cols">
+      <div class="panel"><table>
+        <tr><th class="title" colspan="4">Panel A</th></tr>
+        <tr><td class="name">height</td><td class="ref"></td><td class="val">169.2</td><td class="judg"></td></tr>
+        <tr><td class="name">BMI</td><td class="ref">18.5-24.9</td><td class="val">23.1</td><td class="judg">A</td></tr>
+      </table></div>
+      <div class="panel"><table>
+        <tr><th class="title" colspan="4">Panel B</th></tr>
+        <tr><td class="name">WBC</td><td class="ref">39-98</td><td class="val">56.0</td><td class="judg"></td></tr>
+        <tr><td class="name">RBC</td><td class="ref">427-570</td><td class="val">509</td><td class="judg"></td></tr>
+      </table></div>
+    </div>
+  </body>
+</html>
