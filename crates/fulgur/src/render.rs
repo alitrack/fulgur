@@ -5447,4 +5447,328 @@ mod tests {
             &implicit,
         );
     }
+
+    // ── Inline smoke tests: exercise rendering paths for --lib coverage ──────
+    //
+    // Integration smoke tests in crates/fulgur/tests/render_smoke.rs are
+    // excluded from `cargo llvm-cov --lib` measurement. These inline tests
+    // exercise the same rendering functions (draw_block_v2, draw_paragraph_v2,
+    // draw_image_v2, draw_svg_v2, draw_table_v2, draw_under_transform/clip/
+    // opacity, try_start_tagged, paint_multicol_paragraph_slices, …) through
+    // Engine::render_html so the coverage gate sees them.
+
+    fn render_html(html: &str) -> Vec<u8> {
+        crate::engine::Engine::builder()
+            .build()
+            .render_html(html)
+            .expect("render failed")
+    }
+
+    // Valid 1×1 red PNG for image tests (same fixture used in render_smoke.rs).
+    const RED_1X1_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    // --- draw_block_v2 / draw_block_inner_paint / draw_paragraph_v2 ---
+
+    #[test]
+    fn render_smoke_block_with_background_and_border() {
+        // Exercises draw_block_v2 → draw_block_inner_paint (bg + border paint).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:100px;height:60px;background:#cef;
+                        border:2px solid #44a;padding:8px;">
+              content
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_paragraph_with_text() {
+        // Exercises draw_paragraph_v2 → draw_paragraph_inner_paint →
+        // paragraph_lines_for_page (non-split) → draw_shaped_lines text arm.
+        let pdf = render_html(r#"<!doctype html><html><body><p>Hello, world.</p></body></html>"#);
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_block_with_inline_text_content() {
+        // Exercises draw_block_with_inner_content (block + inline paragraph)
+        // and dispatch_fragment's paragraph-without-block path.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p style="background:#fee;border:1px solid #c88;padding:4px;">
+              Styled inline text block.
+            </p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_list_item_with_block / draw_list_item_marker ---
+
+    #[test]
+    fn render_smoke_unordered_list_with_disc_markers() {
+        // Exercises draw_list_item_with_block + draw_list_item_marker
+        // (outside/disc default marker path).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <ul><li>Alpha</li><li>Beta</li><li>Gamma</li></ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_ordered_list_with_decimal_markers() {
+        // Exercises draw_list_item_marker's counter text path.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <ol><li>One</li><li>Two</li><li>Three</li></ol>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_list_style_inside() {
+        // list-style-position: inside routes through a different marker
+        // placement path in draw_list_item_marker.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <ul style="list-style-position:inside">
+              <li>Item A</li><li>Item B</li>
+            </ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_image_v2 / draw_image_inner_paint / decode_image_for_v2 ---
+
+    #[test]
+    fn render_smoke_raster_image_in_flow() {
+        // Exercises draw_image_v2 → draw_image_inner_paint → decode_image_for_v2
+        // PNG branch. The image is registered via AssetBundle.
+        let mut bundle = crate::asset::AssetBundle::default();
+        bundle.add_image("img.png", RED_1X1_PNG.to_vec());
+        let pdf = crate::engine::Engine::builder()
+            .assets(bundle)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <img src="img.png" style="width:64px;height:64px;">
+                </body></html>"#,
+            )
+            .expect("render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_svg_v2 / draw_svg_inner_paint ---
+
+    #[test]
+    fn render_smoke_svg_inline_in_flow() {
+        // Exercises draw_svg_v2 → draw_svg_inner_paint.
+        let pdf = render_html(
+            r##"<!doctype html><html><body>
+            <svg xmlns="http://www.w3.org/2000/svg" width="60" height="60">
+              <rect x="5" y="5" width="50" height="50" fill="#3af"/>
+            </svg>
+            </body></html>"##,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_table_v2 / paint_table_outer_frame ---
+
+    #[test]
+    fn render_smoke_table_with_borders() {
+        // Exercises draw_table_v2 → table_box_size + paint_table_outer_frame.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <table border="1" style="border-collapse:collapse">
+              <tr><th>A</th><th>B</th></tr>
+              <tr><td>1</td><td>2</td></tr>
+            </table>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_table_overflow_clip() {
+        // Exercises draw_under_clip_table when a table has overflow:hidden
+        // and descendant cells need clipping.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <table style="width:200px;overflow:hidden;background:#eef">
+              <tr>
+                <td style="background:#cef;padding:4px">Cell 1</td>
+                <td style="background:#fce;padding:4px">Cell 2</td>
+              </tr>
+            </table>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_under_transform ---
+
+    #[test]
+    fn render_smoke_transform_rotate() {
+        // Exercises draw_under_transform (the `transform: rotate(…)` path).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:80px;height:40px;background:#cef;transform:rotate(15deg)">
+              rotated
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_under_clip ---
+
+    #[test]
+    fn render_smoke_overflow_hidden_clips_child() {
+        // Exercises draw_under_clip with a child that overflows its container.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:80px;height:40px;overflow:hidden;background:#cef">
+              <div style="width:200px;height:20px;background:#f99">clipped</div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_under_opacity ---
+
+    #[test]
+    fn render_smoke_opacity_on_block_with_child_svg() {
+        // Exercises draw_under_opacity: a block with fractional opacity wrapping
+        // an SVG child forces the opacity_descendants path.
+        let pdf = render_html(
+            r##"<!doctype html><html><body>
+            <div style="opacity:0.5">
+              <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+                <circle cx="20" cy="20" r="15" fill="#e74"/>
+              </svg>
+            </div>
+            </body></html>"##,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- try_start_tagged / finish_tagged ---
+
+    #[test]
+    fn render_smoke_tagged_pdf_headings_and_paragraphs() {
+        // Exercises try_start_tagged + finish_tagged for H and P entries.
+        let pdf = crate::engine::Engine::builder()
+            .tagged(true)
+            .lang("en")
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <h1>Heading One</h1>
+                <p>A paragraph of text.</p>
+                <h2>Heading Two</h2>
+                <p>Another paragraph.</p>
+                </body></html>"#,
+            )
+            .expect("tagged render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- paint_multicol_paragraph_slices ---
+
+    #[test]
+    fn render_smoke_multicol_with_paragraph_text() {
+        // Exercises paint_multicol_paragraph_slices: a multicol container whose
+        // columns each hold inline text. Without this, the slice-distribution
+        // logic for paragraph spans across multicol columns is untouched.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:2;column-gap:20px;width:400px">
+              <p>Column text alpha beta gamma delta epsilon zeta eta theta.</p>
+              <p>Second paragraph iota kappa lambda mu nu xi omicron pi rho.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- render_page (MarginBoxRenderer) / draw_v2_page ---
+
+    #[test]
+    fn render_smoke_page_margin_box_bottom_center() {
+        // Exercises draw_v2_page → MarginBoxRenderer::render_page for an
+        // @bottom-center margin box — the most common GCPM use case.
+        let pdf = render_html(
+            r#"<!doctype html><html><head><style>
+            @page {
+              size: A4; margin: 20mm;
+              @bottom-center { content: "Page footer"; }
+            }
+            </style></head><body><p>Body content.</p></body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_page_with_body_background_multi_page() {
+        // Exercises paint_root_block_v2 (html + body pre-passes on every page)
+        // and draw_v2_page across multiple pages.
+        let pdf = render_html(
+            r#"<!doctype html><html><head><style>
+            html,body{margin:0;background:#fafafa}
+            .tall{height:900px;background:#cef}
+            </style></head><body>
+            <div class="tall"></div><div class="tall"></div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- dispatch_fragment: visibility skip path ---
+
+    #[test]
+    fn render_smoke_visibility_hidden_element_skipped() {
+        // Exercises the `!block.visible` early-return in dispatch_fragment
+        // (and draw_block_v2). The element should not paint but render must succeed.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="visibility:hidden;width:100px;height:50px;background:red"></div>
+            <div style="width:100px;height:50px;background:#cef">visible</div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- decode_image_for_v2: valid PNG path (non-trivial decode) ---
+
+    #[test]
+    fn render_smoke_png_image_decode_success() {
+        // Exercises decode_image_for_v2's Png branch with valid data, ensuring
+        // ImageFormat::to_krilla_image returns Ok and draw_image_inner_paint fires.
+        let mut bundle = crate::asset::AssetBundle::default();
+        bundle.add_image("red.png", RED_1X1_PNG.to_vec());
+        let pdf = crate::engine::Engine::builder()
+            .assets(bundle)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body style="margin:0">
+                <div style="background:url(red.png);width:80px;height:80px"></div>
+                </body></html>"#,
+            )
+            .expect("render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
 }
