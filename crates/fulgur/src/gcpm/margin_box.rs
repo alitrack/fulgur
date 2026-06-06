@@ -1023,17 +1023,17 @@ mod tests {
 
     #[test]
     fn test_compute_edge_layout_bottom_left_only() {
-        // No center, only last (BottomRight) — exercises the `offset += s` for last
+        // No center, only first (BottomLeft) — exercises the `offset += s`
         // in the sequential (no-center) branch of compute_edge_layout.
         let p = PageSize::A4;
         let m = Margin::uniform(72.0);
         let content_width = p.width - m.left - m.right;
         let mut defined = BTreeMap::new();
-        defined.insert(MarginBoxPosition::BottomRight, 120.0);
+        defined.insert(MarginBoxPosition::BottomLeft, 120.0);
         let result = compute_edge_layout(Edge::Bottom, &defined, p, m);
         assert_eq!(result.len(), 1);
-        let rect = result[&MarginBoxPosition::BottomRight];
-        // Last-only: gets full available width; starts at margin.left
+        let rect = result[&MarginBoxPosition::BottomLeft];
+        // First-only: gets full available width; starts at margin.left
         assert!(approx(rect.width, content_width));
         assert!(approx(rect.x, m.left));
     }
