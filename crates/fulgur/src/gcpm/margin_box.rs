@@ -702,4 +702,339 @@ mod tests {
         // Right ends at content edge
         assert!((r.x + r.width - (margin.left + content_width)).abs() < 0.01);
     }
+
+    // --- Edge::is_horizontal ---
+
+    #[test]
+    fn edge_is_horizontal_top_and_bottom_are_horizontal() {
+        assert!(Edge::Top.is_horizontal());
+        assert!(Edge::Bottom.is_horizontal());
+    }
+
+    #[test]
+    fn edge_is_horizontal_left_and_right_are_not_horizontal() {
+        assert!(!Edge::Left.is_horizontal());
+        assert!(!Edge::Right.is_horizontal());
+    }
+
+    // --- MarginBoxPosition::edge ---
+
+    #[test]
+    fn edge_top_positions_belong_to_top_edge() {
+        assert_eq!(MarginBoxPosition::TopLeft.edge(), Some(Edge::Top));
+        assert_eq!(MarginBoxPosition::TopCenter.edge(), Some(Edge::Top));
+        assert_eq!(MarginBoxPosition::TopRight.edge(), Some(Edge::Top));
+    }
+
+    #[test]
+    fn edge_bottom_positions_belong_to_bottom_edge() {
+        assert_eq!(MarginBoxPosition::BottomLeft.edge(), Some(Edge::Bottom));
+        assert_eq!(MarginBoxPosition::BottomCenter.edge(), Some(Edge::Bottom));
+        assert_eq!(MarginBoxPosition::BottomRight.edge(), Some(Edge::Bottom));
+    }
+
+    #[test]
+    fn edge_left_positions_belong_to_left_edge() {
+        assert_eq!(MarginBoxPosition::LeftTop.edge(), Some(Edge::Left));
+        assert_eq!(MarginBoxPosition::LeftMiddle.edge(), Some(Edge::Left));
+        assert_eq!(MarginBoxPosition::LeftBottom.edge(), Some(Edge::Left));
+    }
+
+    #[test]
+    fn edge_right_positions_belong_to_right_edge() {
+        assert_eq!(MarginBoxPosition::RightTop.edge(), Some(Edge::Right));
+        assert_eq!(MarginBoxPosition::RightMiddle.edge(), Some(Edge::Right));
+        assert_eq!(MarginBoxPosition::RightBottom.edge(), Some(Edge::Right));
+    }
+
+    #[test]
+    fn edge_corner_positions_return_none() {
+        assert_eq!(MarginBoxPosition::TopLeftCorner.edge(), None);
+        assert_eq!(MarginBoxPosition::TopRightCorner.edge(), None);
+        assert_eq!(MarginBoxPosition::BottomLeftCorner.edge(), None);
+        assert_eq!(MarginBoxPosition::BottomRightCorner.edge(), None);
+    }
+
+    // --- from_at_keyword: remaining keywords not yet covered ---
+
+    #[test]
+    fn from_at_keyword_all_valid_keywords() {
+        let cases: &[(&str, MarginBoxPosition)] = &[
+            ("top-left-corner", MarginBoxPosition::TopLeftCorner),
+            ("top-left", MarginBoxPosition::TopLeft),
+            ("top-center", MarginBoxPosition::TopCenter),
+            ("top-right", MarginBoxPosition::TopRight),
+            ("top-right-corner", MarginBoxPosition::TopRightCorner),
+            ("left-top", MarginBoxPosition::LeftTop),
+            ("left-middle", MarginBoxPosition::LeftMiddle),
+            ("left-bottom", MarginBoxPosition::LeftBottom),
+            ("right-top", MarginBoxPosition::RightTop),
+            ("right-middle", MarginBoxPosition::RightMiddle),
+            ("right-bottom", MarginBoxPosition::RightBottom),
+            ("bottom-left-corner", MarginBoxPosition::BottomLeftCorner),
+            ("bottom-left", MarginBoxPosition::BottomLeft),
+            ("bottom-center", MarginBoxPosition::BottomCenter),
+            ("bottom-right", MarginBoxPosition::BottomRight),
+            ("bottom-right-corner", MarginBoxPosition::BottomRightCorner),
+        ];
+        for (keyword, expected) in cases {
+            assert_eq!(
+                MarginBoxPosition::from_at_keyword(keyword),
+                Some(*expected),
+                "keyword={keyword}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_at_keyword_case_insensitive() {
+        assert_eq!(
+            MarginBoxPosition::from_at_keyword("TOP-LEFT"),
+            Some(MarginBoxPosition::TopLeft)
+        );
+        assert_eq!(
+            MarginBoxPosition::from_at_keyword("Bottom-Right-Corner"),
+            Some(MarginBoxPosition::BottomRightCorner)
+        );
+    }
+
+    // --- bounding_rect: all remaining positions ---
+
+    fn page() -> PageSize {
+        PageSize::A4 // 595.28 × 841.89 pt
+    }
+
+    fn margin() -> Margin {
+        Margin {
+            top: 50.0,
+            right: 40.0,
+            bottom: 60.0,
+            left: 70.0,
+        }
+    }
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.01
+    }
+
+    #[test]
+    fn bounding_rect_top_right_corner() {
+        let r = MarginBoxPosition::TopRightCorner.bounding_rect(page(), margin());
+        assert!(approx(r.x, page().width - margin().right));
+        assert!(approx(r.y, 0.0));
+        assert!(approx(r.width, margin().right));
+        assert!(approx(r.height, margin().top));
+    }
+
+    #[test]
+    fn bounding_rect_top_left() {
+        let r = MarginBoxPosition::TopLeft.bounding_rect(page(), margin());
+        let content_w = page().width - margin().left - margin().right;
+        assert!(approx(r.x, margin().left));
+        assert!(approx(r.y, 0.0));
+        assert!(approx(r.width, content_w / 3.0));
+        assert!(approx(r.height, margin().top));
+    }
+
+    #[test]
+    fn bounding_rect_top_right() {
+        let r = MarginBoxPosition::TopRight.bounding_rect(page(), margin());
+        let content_w = page().width - margin().left - margin().right;
+        let third = content_w / 3.0;
+        assert!(approx(r.x, margin().left + 2.0 * third));
+        assert!(approx(r.y, 0.0));
+        assert!(approx(r.width, third));
+        assert!(approx(r.height, margin().top));
+    }
+
+    #[test]
+    fn bounding_rect_bottom_left_corner() {
+        let r = MarginBoxPosition::BottomLeftCorner.bounding_rect(page(), margin());
+        assert!(approx(r.x, 0.0));
+        assert!(approx(r.y, page().height - margin().bottom));
+        assert!(approx(r.width, margin().left));
+        assert!(approx(r.height, margin().bottom));
+    }
+
+    #[test]
+    fn bounding_rect_bottom_right_corner() {
+        let r = MarginBoxPosition::BottomRightCorner.bounding_rect(page(), margin());
+        assert!(approx(r.x, page().width - margin().right));
+        assert!(approx(r.y, page().height - margin().bottom));
+        assert!(approx(r.width, margin().right));
+        assert!(approx(r.height, margin().bottom));
+    }
+
+    #[test]
+    fn bounding_rect_bottom_left() {
+        let r = MarginBoxPosition::BottomLeft.bounding_rect(page(), margin());
+        let content_w = page().width - margin().left - margin().right;
+        assert!(approx(r.x, margin().left));
+        assert!(approx(r.y, page().height - margin().bottom));
+        assert!(approx(r.width, content_w / 3.0));
+        assert!(approx(r.height, margin().bottom));
+    }
+
+    #[test]
+    fn bounding_rect_bottom_right() {
+        let r = MarginBoxPosition::BottomRight.bounding_rect(page(), margin());
+        let content_w = page().width - margin().left - margin().right;
+        let third = content_w / 3.0;
+        assert!(approx(r.x, margin().left + 2.0 * third));
+        assert!(approx(r.y, page().height - margin().bottom));
+        assert!(approx(r.width, third));
+        assert!(approx(r.height, margin().bottom));
+    }
+
+    #[test]
+    fn bounding_rect_left_top() {
+        let r = MarginBoxPosition::LeftTop.bounding_rect(page(), margin());
+        let content_h = page().height - margin().top - margin().bottom;
+        assert!(approx(r.x, 0.0));
+        assert!(approx(r.y, margin().top));
+        assert!(approx(r.width, margin().left));
+        assert!(approx(r.height, content_h / 3.0));
+    }
+
+    #[test]
+    fn bounding_rect_left_middle() {
+        let r = MarginBoxPosition::LeftMiddle.bounding_rect(page(), margin());
+        let content_h = page().height - margin().top - margin().bottom;
+        let third = content_h / 3.0;
+        assert!(approx(r.x, 0.0));
+        assert!(approx(r.y, margin().top + third));
+        assert!(approx(r.width, margin().left));
+        assert!(approx(r.height, third));
+    }
+
+    #[test]
+    fn bounding_rect_left_bottom() {
+        let r = MarginBoxPosition::LeftBottom.bounding_rect(page(), margin());
+        let content_h = page().height - margin().top - margin().bottom;
+        let third = content_h / 3.0;
+        assert!(approx(r.x, 0.0));
+        assert!(approx(r.y, margin().top + 2.0 * third));
+        assert!(approx(r.width, margin().left));
+        assert!(approx(r.height, third));
+    }
+
+    #[test]
+    fn bounding_rect_right_top() {
+        let r = MarginBoxPosition::RightTop.bounding_rect(page(), margin());
+        let content_h = page().height - margin().top - margin().bottom;
+        assert!(approx(r.x, page().width - margin().right));
+        assert!(approx(r.y, margin().top));
+        assert!(approx(r.width, margin().right));
+        assert!(approx(r.height, content_h / 3.0));
+    }
+
+    #[test]
+    fn bounding_rect_right_middle() {
+        let r = MarginBoxPosition::RightMiddle.bounding_rect(page(), margin());
+        let content_h = page().height - margin().top - margin().bottom;
+        let third = content_h / 3.0;
+        assert!(approx(r.x, page().width - margin().right));
+        assert!(approx(r.y, margin().top + third));
+        assert!(approx(r.width, margin().right));
+        assert!(approx(r.height, third));
+    }
+
+    #[test]
+    fn bounding_rect_right_bottom() {
+        let r = MarginBoxPosition::RightBottom.bounding_rect(page(), margin());
+        let content_h = page().height - margin().top - margin().bottom;
+        let third = content_h / 3.0;
+        assert!(approx(r.x, page().width - margin().right));
+        assert!(approx(r.y, margin().top + 2.0 * third));
+        assert!(approx(r.width, margin().right));
+        assert!(approx(r.height, third));
+    }
+
+    // --- distribute_sizes: first-only and last-only ---
+
+    #[test]
+    fn test_distribute_first_only() {
+        let (f, c, l) = distribute_sizes(Some(80.0), None, None, 400.0);
+        assert!(
+            approx(f.unwrap(), 400.0),
+            "first-only should get full space"
+        );
+        assert!(c.is_none());
+        assert!(l.is_none());
+    }
+
+    #[test]
+    fn test_distribute_last_only() {
+        let (f, c, l) = distribute_sizes(None, None, Some(80.0), 400.0);
+        assert!(f.is_none());
+        assert!(c.is_none());
+        assert!(approx(l.unwrap(), 400.0), "last-only should get full space");
+    }
+
+    #[test]
+    fn test_distribute_none_all() {
+        let (f, c, l) = distribute_sizes(None, None, None, 400.0);
+        assert!(f.is_none());
+        assert!(c.is_none());
+        assert!(l.is_none());
+    }
+
+    // --- compute_edge_layout: bottom edge and last-only ---
+
+    #[test]
+    fn test_compute_edge_layout_bottom_center_only() {
+        let p = PageSize::A4;
+        let m = Margin::uniform(72.0);
+        let content_width = p.width - m.left - m.right;
+        let mut defined = BTreeMap::new();
+        defined.insert(MarginBoxPosition::BottomCenter, 100.0);
+        let result = compute_edge_layout(Edge::Bottom, &defined, p, m);
+        assert_eq!(result.len(), 1);
+        let rect = result[&MarginBoxPosition::BottomCenter];
+        assert!(approx(rect.y, p.height - m.bottom));
+        assert!(approx(rect.width, content_width));
+        assert!(approx(rect.height, m.bottom));
+    }
+
+    #[test]
+    fn test_compute_edge_layout_right_middle_only() {
+        let p = PageSize::A4;
+        let m = Margin::uniform(72.0);
+        let content_height = p.height - m.top - m.bottom;
+        let mut defined = BTreeMap::new();
+        defined.insert(MarginBoxPosition::RightMiddle, 50.0);
+        let result = compute_edge_layout(Edge::Right, &defined, p, m);
+        assert_eq!(result.len(), 1);
+        let rect = result[&MarginBoxPosition::RightMiddle];
+        assert!(approx(rect.x, p.width - m.right));
+        assert!(approx(rect.width, m.right));
+        assert!(approx(rect.height, content_height));
+        assert!(approx(rect.y, m.top));
+    }
+
+    #[test]
+    fn test_compute_edge_layout_no_defined_returns_empty() {
+        let p = PageSize::A4;
+        let m = Margin::uniform(72.0);
+        let defined = BTreeMap::new();
+        let result = compute_edge_layout(Edge::Top, &defined, p, m);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_compute_edge_layout_bottom_left_only() {
+        // No center, only last (BottomRight) — exercises the `offset += s` for last
+        // in the sequential (no-center) branch of compute_edge_layout.
+        let p = PageSize::A4;
+        let m = Margin::uniform(72.0);
+        let content_width = p.width - m.left - m.right;
+        let mut defined = BTreeMap::new();
+        defined.insert(MarginBoxPosition::BottomRight, 120.0);
+        let result = compute_edge_layout(Edge::Bottom, &defined, p, m);
+        assert_eq!(result.len(), 1);
+        let rect = result[&MarginBoxPosition::BottomRight];
+        // Last-only: gets full available width; starts at margin.left
+        assert!(approx(rect.width, content_width));
+        assert!(approx(rect.x, m.left));
+    }
 }
