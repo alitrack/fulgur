@@ -981,7 +981,7 @@ mod tests {
     use crate::image::ImageFormat;
 
     /// Minimal 1x1 red PNG for test images.
-    const TEST_PNG: &[u8] = &[
+    pub(super) const TEST_PNG: &[u8] = &[
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
         0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8,
@@ -1872,5 +1872,257 @@ mod decoration_metrics_real_font_tests {
             m2.overline_pos > m1.overline_pos,
             "larger font_size should increase overline_pos"
         );
+    }
+}
+
+// Exercises draw_straight_line, draw_decoration_line (all five style
+// variants), draw_line_decorations (UNDERLINE / OVERLINE / LINE_THROUGH
+// arms and span-merging logic), RunRegionTracker (tagged-PDF + link path),
+// and the LineItem::Image / LineItem::InlineBox arms of draw_shaped_lines
+// through Engine::render_html so the coverage gate sees them under --lib.
+#[cfg(test)]
+mod render_smoke_tests {
+    fn render_html(html: &str) -> Vec<u8> {
+        crate::engine::Engine::builder()
+            .build()
+            .render_html(html)
+            .expect("render failed")
+    }
+
+    fn render_html_tagged(html: &str) -> Vec<u8> {
+        crate::engine::Engine::builder()
+            .tagged(true)
+            .lang("en")
+            .build()
+            .render_html(html)
+            .expect("tagged render failed")
+    }
+
+    use super::tests::TEST_PNG as RED_1X1_PNG;
+
+    // ── draw_decoration_line: Solid (→ draw_straight_line) ───────────────
+
+    #[test]
+    fn draw_decoration_solid_underline() {
+        // Exercises draw_decoration_line Solid branch → draw_straight_line.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p style="text-decoration: underline">underlined text</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── draw_decoration_line: Dashed (→ draw_straight_line with dash array) ─
+
+    #[test]
+    fn draw_decoration_dashed_underline() {
+        // Exercises draw_decoration_line Dashed branch.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p style="text-decoration: underline; text-decoration-style: dashed">dashed</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── draw_decoration_line: Dotted (Round linecap + zero-length dash) ─────
+
+    #[test]
+    fn draw_decoration_dotted_underline() {
+        // Exercises draw_decoration_line Dotted branch (round linecap).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p style="text-decoration: underline; text-decoration-style: dotted">dotted</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── draw_decoration_line: Double (two draw_straight_line calls) ──────────
+
+    #[test]
+    fn draw_decoration_double_underline() {
+        // Exercises draw_decoration_line Double branch (offset ± gap/2).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p style="text-decoration: underline; text-decoration-style: double">double</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── draw_decoration_line: Wavy (cubic-bezier loop) ───────────────────────
+
+    #[test]
+    fn draw_decoration_wavy_underline() {
+        // Exercises draw_decoration_line Wavy branch — the cubic-bezier
+        // oscillation loop (wavelength ≥ 0.01 so the guard lets it through).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p style="text-decoration: underline; text-decoration-style: wavy">wavy</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── draw_line_decorations: OVERLINE arm ──────────────────────────────────
+
+    #[test]
+    fn draw_line_decorations_overline_arm() {
+        // Exercises the TextDecorationLine::OVERLINE branch inside
+        // draw_line_decorations, computing line_y = baseline - overline_pos.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p style="text-decoration: overline">overlined text</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── draw_line_decorations: LINE_THROUGH arm ───────────────────────────────
+
+    #[test]
+    fn draw_line_decorations_line_through_arm() {
+        // Exercises the TextDecorationLine::LINE_THROUGH branch inside
+        // draw_line_decorations, computing line_y = baseline - strikethrough_offset.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p style="text-decoration: line-through">struck text</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── draw_line_decorations: all three lines combined ───────────────────────
+
+    #[test]
+    fn draw_line_decorations_all_three_combined() {
+        // A single span with underline + overline + line-through exercises all
+        // three draw_line_decorations arms in one pass.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p style="text-decoration: underline overline line-through">all decorations</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── draw_line_decorations: span-merging (adjacent same-decoration runs) ──
+
+    #[test]
+    fn draw_line_decorations_span_merging_adjacent_runs() {
+        // Two adjacent <span>s with identical underline decoration. The
+        // gap < 0.5 branch in draw_line_decorations should extend the first
+        // DecorationSpan rather than starting a new one.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p><span style="text-decoration: underline">hello</span><span
+               style="text-decoration: underline"> world</span></p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── RunRegionTracker: tagged PDF with linked text ─────────────────────────
+
+    #[test]
+    fn run_region_tracker_tagged_paragraph_with_link() {
+        // tagged(true) enables tag_collector; the <a href> makes
+        // para_has_link_runs return true, so link_run_node_id is set.
+        // Together these conditions activate RunRegionTracker::new →
+        // transition_to → close inside draw_shaped_lines.
+        let pdf = render_html_tagged(
+            r#"<!doctype html><html><body>
+            <p>Visit <a href="https://example.com">this link</a> for details.</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn run_region_tracker_tagged_paragraph_link_only() {
+        // Paragraph containing only a link (no surrounding non-link text).
+        // Exercises the transition from non-link to link run and back to
+        // end-of-paragraph close at the paragraph boundary.
+        let pdf = render_html_tagged(
+            r#"<!doctype html><html><body>
+            <p><a href="https://example.com">entire paragraph is a link</a></p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── draw_shaped_lines: LineItem::Image arm (inside image marker) ─────────
+
+    #[test]
+    fn draw_shaped_lines_image_arm_inside_image_marker() {
+        // list-style-position: inside + list-style-image creates a
+        // LineItem::Image item prepended to the first paragraph line.
+        // draw_shaped_lines hits the Image arm, rendering it via Krilla.
+        let mut assets = crate::asset::AssetBundle::new();
+        assets.add_image("bullet.png", RED_1X1_PNG.to_vec());
+        let pdf = crate::engine::Engine::builder()
+            .assets(assets)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <ul style="list-style-position: inside; list-style-image: url(bullet.png)">
+                    <li>item with image marker</li>
+                </ul>
+                </body></html>"#,
+            )
+            .expect("render failed");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── draw_shaped_lines: LineItem::Image with link (image link rect path) ──
+
+    #[test]
+    fn draw_shaped_lines_image_arm_linked_image_in_paragraph() {
+        // An <img> inside an <a href> inside a <p> produces a LineItem::Image
+        // with img.link set, exercising the push_rect call for image links.
+        let mut assets = crate::asset::AssetBundle::new();
+        assets.add_image("pixel.png", RED_1X1_PNG.to_vec());
+        let pdf = crate::engine::Engine::builder()
+            .assets(assets)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <p><a href="https://example.com"><img src="pixel.png"
+                   width="20" height="20"></a> caption text</p>
+                </body></html>"#,
+            )
+            .expect("render failed");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // ── draw_shaped_lines: LineItem::InlineBox arm ───────────────────────────
+
+    #[test]
+    fn draw_shaped_lines_inline_box_arm() {
+        // A display:inline-block element inside a paragraph creates a
+        // LineItem::InlineBox, exercising that arm of draw_shaped_lines.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p>before <span style="display:inline-block;width:40px;height:20px;
+               background:red"></span> after</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn draw_shaped_lines_inline_box_arm_with_link() {
+        // display:inline-block wrapped in <a href> exercises the link rect
+        // collection path for LineItem::InlineBox (ib.link is set).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p><a href="https://example.com"><span
+               style="display:inline-block;width:30px;height:15px;background:blue">
+            </span></a></p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
     }
 }
