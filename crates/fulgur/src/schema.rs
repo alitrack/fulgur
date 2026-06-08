@@ -792,4 +792,270 @@ mod tests {
         assert_eq!(schema["properties"]["title"]["type"], "string");
         assert_eq!(schema["properties"]["subtitle"]["type"], "string");
     }
+
+    // ── error paths ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn extract_schema_parse_error_returns_err() {
+        let result = extract_schema("{% if %}", "t.html");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn extract_schema_with_data_parse_error_returns_err() {
+        let result = extract_schema_with_data("{% if %}", "t.html", &json!({}));
+        assert!(result.is_err());
+    }
+
+    // ── value_to_schema coverage (via extract_schema_with_data) ──────────────
+
+    #[test]
+    fn value_to_schema_bool_inferred_from_data() {
+        let data = json!({"flag": true});
+        let schema = extract_schema_with_data("{{ flag }}", "t.html", &data).unwrap();
+        assert_eq!(schema["properties"]["flag"]["type"], "boolean");
+    }
+
+    #[test]
+    fn value_to_schema_null_inferred_from_data() {
+        let data = json!({"val": null});
+        let schema = extract_schema_with_data("{{ val }}", "t.html", &data).unwrap();
+        assert_eq!(schema["properties"]["val"]["type"], "null");
+    }
+
+    #[test]
+    fn value_to_schema_empty_array_inferred_from_data() {
+        let data = json!({"items": []});
+        let schema = extract_schema_with_data("{{ items }}", "t.html", &data).unwrap();
+        assert_eq!(schema["properties"]["items"]["type"], "array");
+        // Empty array → no "items" key on the array schema
+        assert!(schema["properties"]["items"]["items"].is_null());
+    }
+
+    #[test]
+    fn extract_schema_with_data_non_object_data_yields_empty_properties() {
+        // data is not a JSON object → the `if let Value::Object` branch is skipped
+        let schema = extract_schema_with_data("{{ x }}", "t.html", &json!([1, 2, 3])).unwrap();
+        assert!(schema["properties"]["x"].is_null());
+    }
+
+    // ── SetBlock statement ({% set x %}...{% endset %}) ───────────────────────
+
+    #[test]
+    fn set_block_body_variables_collected_and_var_not_leaked() {
+        // SetBlock: the var "x" should be local; "name" from the body must appear.
+        let schema = extract_schema("{% set x %}{{ name }}{% endset %}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["name"]["type"], "string");
+        assert!(schema["properties"]["x"].is_null());
+    }
+
+    // ── FilterBlock statement ({% filter ... %}...{% endfilter %}) ────────────
+
+    #[test]
+    fn filter_block_body_variables_collected() {
+        let schema =
+            extract_schema("{% filter upper %}{{ greeting }}{% endfilter %}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["greeting"]["type"], "string");
+    }
+
+    // ── AutoEscape statement ({% autoescape %}...{% endautoescape %}) ─────────
+
+    #[test]
+    fn autoescape_block_body_variables_collected() {
+        let schema = extract_schema(
+            "{% autoescape true %}{{ content }}{% endautoescape %}",
+            "t.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["content"]["type"], "string");
+    }
+
+    // ── BinOp expression ──────────────────────────────────────────────────────
+
+    #[test]
+    fn binop_concat_collects_both_operands() {
+        // `a ~ b` is string-concatenation BinOp; both variables must appear.
+        let schema = extract_schema("{{ first ~ last }}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["first"]["type"], "string");
+        assert_eq!(schema["properties"]["last"]["type"], "string");
+    }
+
+    #[test]
+    fn binop_in_if_condition_collects_variables() {
+        let schema = extract_schema("{% if a == b %}{{ c }}{% endif %}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["a"]["type"], "string");
+        assert_eq!(schema["properties"]["b"]["type"], "string");
+        assert_eq!(schema["properties"]["c"]["type"], "string");
+    }
+
+    // ── UnaryOp expression ────────────────────────────────────────────────────
+
+    #[test]
+    fn unaryop_not_collects_inner_variable() {
+        let schema = extract_schema("{% if not flag %}{{ result }}{% endif %}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["flag"]["type"], "string");
+        assert_eq!(schema["properties"]["result"]["type"], "string");
+    }
+
+    // ── IfExpr (ternary) ──────────────────────────────────────────────────────
+
+    #[test]
+    fn ternary_if_expr_collects_all_three_parts() {
+        // `a if cond else b` — test_expr, true_expr, false_expr all collected.
+        let schema = extract_schema("{{ a if cond else b }}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["a"]["type"], "string");
+        assert_eq!(schema["properties"]["cond"]["type"], "string");
+        assert_eq!(schema["properties"]["b"]["type"], "string");
+    }
+
+    #[test]
+    fn ternary_if_expr_without_else_collects_test_and_true() {
+        let schema = extract_schema("{{ a if cond }}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["a"]["type"], "string");
+        assert_eq!(schema["properties"]["cond"]["type"], "string");
+    }
+
+    // ── Test expression ({% if x is ... %}) ───────────────────────────────────
+
+    #[test]
+    fn is_test_expression_collects_subject_variable() {
+        let schema =
+            extract_schema("{% if value is string %}{{ value }}{% endif %}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["value"]["type"], "string");
+    }
+
+    #[test]
+    fn is_test_with_arg_collects_subject() {
+        // `is divisibleby(n)` — the arg is a literal, but the subject is a variable.
+        let schema =
+            extract_schema("{% if count is divisibleby(2) %}even{% endif %}", "t.html").unwrap();
+        assert_eq!(schema["properties"]["count"]["type"], "string");
+    }
+
+    // ── Map expression (dict literal) ─────────────────────────────────────────
+
+    #[test]
+    fn map_expression_value_variables_collected() {
+        // `{"key": user}` — "user" (a variable value) must appear; "key" (literal key) must not.
+        let schema = extract_schema(r#"{{ {"label": name} }}"#, "t.html").unwrap();
+        assert_eq!(schema["properties"]["name"]["type"], "string");
+    }
+
+    // ── Built-in keyword guard in resolve_expr_path (line 436) ───────────────
+
+    #[test]
+    fn loop_builtin_not_collected_as_schema_property() {
+        // `loop` is a built-in variable; it must not appear in the schema.
+        let schema = extract_schema(
+            "{% for item in items %}{{ loop.index }}{% endfor %}",
+            "t.html",
+        )
+        .unwrap();
+        assert!(schema["properties"]["loop"].is_null());
+        assert_eq!(schema["properties"]["items"]["type"], "array");
+    }
+
+    #[test]
+    fn none_builtin_not_collected_as_schema_property() {
+        let schema = extract_schema("{% if x == none %}{% endif %}", "t.html").unwrap();
+        assert!(schema["properties"]["none"].is_null());
+        assert_eq!(schema["properties"]["x"]["type"], "string");
+    }
+
+    // ── IfCond at end of sibling list — scope merge (lines 205–209) ──────────
+
+    #[test]
+    fn if_at_end_of_body_set_scopes_merged_back() {
+        // The if-block is the last sibling: remaining.is_empty() → both branch scopes
+        // are merged back into the parent scope rather than being used to re-process
+        // trailing siblings.  We verify that the RHS of the inner `set` (i.e. "val"
+        // and "other") appear in the schema, and that the set variables ("x", "y")
+        // do not.
+        let schema = extract_schema(
+            r#"{% if cond %}{% set x = val %}{% else %}{% set y = other %}{% endif %}"#,
+            "t.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["cond"]["type"], "string");
+        assert_eq!(schema["properties"]["val"]["type"], "string");
+        assert_eq!(schema["properties"]["other"]["type"], "string");
+        assert!(schema["properties"]["x"].is_null());
+        assert!(schema["properties"]["y"].is_null());
+    }
+
+    // ── ForLoop with non-resolvable iter path (lines 259–261) ────────────────
+
+    #[test]
+    fn for_loop_with_filter_iter_loop_var_is_local() {
+        // `items | first` is a Filter expr → resolve_expr_path returns None →
+        // the loop variable "item" is inserted with an empty path (local).
+        // Attribute accesses on "item" should NOT leak to the schema.
+        let schema = extract_schema(
+            "{% for item in items | first %}{{ item.name }}{% endfor %}",
+            "t.html",
+        )
+        .unwrap();
+        // "items" is collected from the filter base expression
+        assert_eq!(schema["properties"]["items"]["type"], "string");
+        // "item" is local — must not appear
+        assert!(schema["properties"]["item"].is_null());
+        // "item.name" must not leak as a top-level "name"
+        assert!(schema["properties"]["name"].is_null());
+    }
+
+    // ── ensure_array_at_path: Object arm (lines 525–527) ─────────────────────
+
+    #[test]
+    fn ensure_array_at_nested_path_traverses_object() {
+        // `{{ user.name }}` first creates user as Object.
+        // `{% for item in user.items %}` then calls ensure_array_at_path(root, ["user","items"]):
+        //   → entry at "user" is Object → Object arm (lines 525-527).
+        let schema = extract_schema(
+            "{{ user.name }}{% for item in user.items %}{{ item.val }}{% endfor %}",
+            "t.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["user"]["type"], "object");
+        assert_eq!(
+            schema["properties"]["user"]["properties"]["name"]["type"],
+            "string"
+        );
+        assert_eq!(
+            schema["properties"]["user"]["properties"]["items"]["type"],
+            "array"
+        );
+    }
+
+    // ── ensure_array_at_path: Array arms (lines 529–547) ─────────────────────
+
+    #[test]
+    fn ensure_array_at_nested_path_through_existing_array_string_inner() {
+        // First for loop marks "data" as Array(String).
+        // Second for loop calls ensure_array_at_path(root, ["data","sub"]):
+        //   → entry at "data" is Array(String) → inner match `other` arm (lines 535-540):
+        //     upgrades inner from String to Object.
+        let schema = extract_schema(
+            "{% for x in data %}{% endfor %}{% for x in data.sub %}{{ x.v }}{% endfor %}",
+            "t.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["data"]["type"], "array");
+    }
+
+    #[test]
+    fn ensure_array_at_path_triple_nested_covers_object_inner_arm() {
+        // Three levels:
+        //  1. `{% for x in a %}` → a = Array(String)
+        //  2. `{% for x in a.b %}` → upgrades a's inner to Object({"b": Array(String)})
+        //  3. `{% for x in a.b.c %}` → a = Array(Object({"b":...})) → inner match Object arm
+        //                              (lines 531-533) → descends into children.
+        let schema = extract_schema(
+            "{% for x in a %}{% endfor %}\
+             {% for x in a.b %}{% endfor %}\
+             {% for x in a.b.c %}{% endfor %}",
+            "t.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["a"]["type"], "array");
+    }
 }
