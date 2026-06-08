@@ -4185,16 +4185,30 @@ fn cjk_glyphs_copy_correct_characters() {
     assert_eq!(all_clusters, vec!["你", "好", "世", "界"]);
 }
 
-/// Regression for the multi-GlyphRun duplication bug: when a single Parley
-/// `Run` is split across multiple `GlyphRun`s (as `counters(item, ".")` list
-/// markers produce — one GlyphRun for "1." and another for "Alpha"), iterating
-/// `glyph_run.run().visual_clusters()` emits ALL clusters of the parent Run for
-/// EACH GlyphRun, causing each glyph to appear once per GlyphRun rather than
-/// once total.
+/// Regression for the multi-GlyphRun duplication bug (fulgur-tt91): when a
+/// single Parley `Run` is split across multiple `GlyphRun`s (as the
+/// `counters(item, ".")` generated `::before` content here produces — one
+/// GlyphRun for the counter prefix and another for the body text, both in the
+/// same shaping Run), iterating `glyph_run.run().visual_clusters()` once per
+/// GlyphRun emits ALL clusters of the parent Run for EACH GlyphRun, so every
+/// glyph is drawn once per GlyphRun rather than once total.
 ///
-/// The correct output is "1.Alpha" exactly once per list item. The buggy output
-/// renders "1.Alpha" twice — overlapping at slightly different x positions —
-/// which pdftotext extracts as two occurrences.
+/// With `list-style: none` the prefix comes from `::before` generated content,
+/// so this fixture exercises the inline-root paragraph path
+/// (`convert/inline_root.rs::extract_paragraph`). The structurally identical
+/// loop also lives in `convert/mod.rs`, `paragraph.rs`, and
+/// `convert/list_marker.rs`; this fixture does NOT route through those, so a
+/// regression reintroduced there would slip past this test — covering them
+/// needs separate fixtures and is out of scope for fulgur-tt91.
+///
+/// Each marker must appear exactly once. We assert on whole `pdftotext -raw`
+/// lines rather than `text.matches(marker).count()`: a bare substring count is
+/// unsound because shorter markers are substrings of longer ones — e.g.
+/// `"2.Beta"` occurs inside the `"2.2.Beta-two"` line, so
+/// `matches("2.Beta").count()` is 2 even in correct output. Full-line equality
+/// also catches the duplication whether pdftotext emits the doubled glyphs as a
+/// second line (`"1.Alpha"` twice → count 2) or merges them on one line
+/// (`"1.Alpha1.Alpha"` → count 0); both differ from the required 1.
 #[test]
 fn multi_glyph_run_marker_renders_without_duplication() {
     let html = r#"<!doctype html>
@@ -4227,12 +4241,27 @@ body { font-family: 'Noto Sans', sans-serif; }
         return;
     };
 
-    let occurrences = text.matches("1.Alpha").count();
-    assert_eq!(
-        occurrences, 1,
-        "marker \"1.Alpha\" rendered {occurrences}× — multi-GlyphRun duplication regression; \
-         extracted text: {text:?}"
-    );
+    // pdftotext -raw flattens each marker + its body label onto its own line.
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    for marker in [
+        "1.Alpha",
+        "2.Beta",
+        "2.1.Beta-one",
+        "2.2.Beta-two",
+        "3.Gamma",
+    ] {
+        let occurrences = lines.iter().filter(|&&l| l == marker).count();
+        assert_eq!(
+            occurrences, 1,
+            "marker {marker:?} appeared on {occurrences} line(s), expected 1 — \
+             multi-GlyphRun duplication regression; extracted lines: {lines:?}"
+        );
+    }
 }
 
 /// Exercises `clear_subtree_cache` for codecov coverage.
