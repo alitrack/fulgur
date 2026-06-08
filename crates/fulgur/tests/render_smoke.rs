@@ -4242,9 +4242,14 @@ body { font-family: 'Noto Sans', sans-serif; }
     };
 
     // pdftotext -raw flattens each marker + its body label onto its own line.
-    let lines: Vec<&str> = text
+    // Strip all whitespace per line so the comparison is robust against
+    // platform-specific spacing extraction: the marker content is `"N. "` with
+    // a trailing space, and some Poppler versions reconstruct it as "1. Alpha"
+    // rather than the "1.Alpha" seen here. Whole-(stripped-)line equality keeps
+    // the substring-safety property ("2.Beta" never equals "2.2.Beta-two").
+    let lines: Vec<String> = text
         .lines()
-        .map(str::trim)
+        .map(|l| l.chars().filter(|c| !c.is_whitespace()).collect::<String>())
         .filter(|l| !l.is_empty())
         .collect();
 
@@ -4255,7 +4260,7 @@ body { font-family: 'Noto Sans', sans-serif; }
         "2.2.Beta-two",
         "3.Gamma",
     ] {
-        let occurrences = lines.iter().filter(|&&l| l == marker).count();
+        let occurrences = lines.iter().filter(|l| l.as_str() == marker).count();
         assert_eq!(
             occurrences, 1,
             "marker {marker:?} appeared on {occurrences} line(s), expected 1 — \
