@@ -1032,6 +1032,14 @@ mod tests {
             schema["properties"]["user"]["properties"]["items"]["items"]["properties"]["val"]["type"],
             "string"
         );
+        assert_eq!(
+            schema["properties"]["user"]["properties"]["items"]["items"]["type"],
+            "object"
+        );
+        assert_eq!(
+            schema["properties"]["user"]["properties"]["items"]["items"]["properties"]["val"]["type"],
+            "string"
+        );
     }
 
     // ── ensure_array_at_path: Array arms (lines 529–547) ─────────────────────
