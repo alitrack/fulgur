@@ -1024,6 +1024,14 @@ mod tests {
             schema["properties"]["user"]["properties"]["items"]["type"],
             "array"
         );
+        assert_eq!(
+            schema["properties"]["user"]["properties"]["items"]["items"]["type"],
+            "object"
+        );
+        assert_eq!(
+            schema["properties"]["user"]["properties"]["items"]["items"]["properties"]["val"]["type"],
+            "string"
+        );
     }
 
     // ── ensure_array_at_path: Array arms (lines 529–547) ─────────────────────
@@ -1033,13 +1041,28 @@ mod tests {
         // First for loop marks "data" as Array(String).
         // Second for loop calls ensure_array_at_path(root, ["data","sub"]):
         //   → entry at "data" is Array(String) → inner match `other` arm (lines 535-540):
-        //     upgrades inner from String to Object.
+        //     upgrades inner from String to Object({"sub": Array(String)}).
+        // `{{ x.v }}` then sets sub's items to Object({"v": String}).
         let schema = extract_schema(
             "{% for x in data %}{% endfor %}{% for x in data.sub %}{{ x.v }}{% endfor %}",
             "t.html",
         )
         .unwrap();
         assert_eq!(schema["properties"]["data"]["type"], "array");
+        assert_eq!(schema["properties"]["data"]["items"]["type"], "object");
+        assert_eq!(
+            schema["properties"]["data"]["items"]["properties"]["sub"]["type"],
+            "array"
+        );
+        assert_eq!(
+            schema["properties"]["data"]["items"]["properties"]["sub"]["items"]["type"],
+            "object"
+        );
+        assert_eq!(
+            schema["properties"]["data"]["items"]["properties"]["sub"]["items"]["properties"]["v"]
+                ["type"],
+            "string"
+        );
     }
 
     #[test]
@@ -1048,7 +1071,7 @@ mod tests {
         //  1. `{% for x in a %}` → a = Array(String)
         //  2. `{% for x in a.b %}` → upgrades a's inner to Object({"b": Array(String)})
         //  3. `{% for x in a.b.c %}` → a = Array(Object({"b":...})) → inner match Object arm
-        //                              (lines 531-533) → descends into children.
+        //                              (lines 531-533) → descends into b's children.
         let schema = extract_schema(
             "{% for x in a %}{% endfor %}\
              {% for x in a.b %}{% endfor %}\
@@ -1057,5 +1080,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(schema["properties"]["a"]["type"], "array");
+        assert_eq!(schema["properties"]["a"]["items"]["type"], "object");
+        assert_eq!(
+            schema["properties"]["a"]["items"]["properties"]["b"]["type"],
+            "array"
+        );
+        assert_eq!(
+            schema["properties"]["a"]["items"]["properties"]["b"]["items"]["type"],
+            "object"
+        );
+        assert_eq!(
+            schema["properties"]["a"]["items"]["properties"]["b"]["items"]["properties"]["c"]["type"],
+            "array"
+        );
+        assert_eq!(
+            schema["properties"]["a"]["items"]["properties"]["b"]["items"]["properties"]["c"]["items"]
+                ["type"],
+            "string"
+        );
     }
 }
