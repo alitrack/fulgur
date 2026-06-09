@@ -2928,6 +2928,13 @@ fn record_subtree_fragments_at_offset(
         page_stride_px: f32,
         total_pages: u32,
         may_extend_pages: bool,
+        // Subtree-offset and border-box size of the nearest positioned
+        // ancestor of `node_id` — the containing block that `node_id`'s
+        // out-of-flow children resolve their explicit insets against (CSS
+        // 2.1 §10.1.4). The body-direct abs at the subtree root is itself
+        // positioned, so it overrides these on the first frame.
+        cb_anchor: (f32, f32),
+        cb_size: (f32, f32),
         depth: usize,
     ) {
         if depth >= crate::MAX_DOM_DEPTH {
@@ -2949,6 +2956,24 @@ fn record_subtree_fragments_at_offset(
             } else {
                 node.children.clone()
             }
+        };
+        // The containing block for THIS node's out-of-flow children is
+        // `node` itself when `node` is positioned (non-static), otherwise the
+        // inherited nearest-positioned ancestor (`cb_anchor`/`cb_size`). A
+        // `position: static` element does not establish a CB, so an abs child
+        // beneath it anchors to the same ancestor its static parent does.
+        let node_positioned = {
+            use ::style::properties::longhands::position::computed_value::T as Pos;
+            node.primary_styles()
+                .is_some_and(|s| !matches!(s.get_box().clone_position(), Pos::Static))
+        };
+        let (child_cb_anchor, child_cb_size) = if node_positioned {
+            (
+                offset_in_subtree,
+                (node.final_layout.size.width, node.final_layout.size.height),
+            )
+        } else {
+            (cb_anchor, cb_size)
         };
         // Page assignment is based on the un-compensated viewport-CB
         // resolved position (the actual paint location). Storage is
@@ -3073,21 +3098,41 @@ fn record_subtree_fragments_at_offset(
                             child.final_layout.size.width,
                             child.final_layout.size.height,
                         );
-                        // `final_layout.size` is the child's border box; the CSS
-                        // containing block for an abs descendant is the positioned
-                        // ancestor's *padding* box. Harmless for `vh` insets (CB-
-                        // independent); only a minor error for `%` insets when the
-                        // CB has non-zero borders.
-                        let (cb_w, cb_h) =
-                            (node.final_layout.size.width, node.final_layout.size.height);
-                        let (rel_x, rel_y) =
-                            resolve_viewport_cb_location(child, child_w, child_h, cb_w, cb_h)
-                                .unwrap_or((
-                                    child.final_layout.location.x,
-                                    child.final_layout.location.y,
-                                ));
-                        let nested_offset =
-                            (offset_in_subtree.0 + rel_x, offset_in_subtree.1 + rel_y);
+                        // Resolve against the nearest positioned ancestor's
+                        // box (`child_cb_*`), NOT the immediate DOM parent —
+                        // a `position: static` parent does not establish a CB
+                        // (CSS 2.1 §10.1.4). `child_cb_size` is that ancestor's
+                        // border box; the spec CB is its padding box — harmless
+                        // for `vh` insets (CB-independent), a minor error for
+                        // `%` insets only when the CB has non-zero borders.
+                        let (rel_x, rel_y) = resolve_viewport_cb_location(
+                            child,
+                            child_w,
+                            child_h,
+                            child_cb_size.0,
+                            child_cb_size.1,
+                        )
+                        .unwrap_or((child.final_layout.location.x, child.final_layout.location.y));
+                        // Per-axis anchor: an explicit inset is relative to the
+                        // CB origin (`child_cb_anchor`); an `auto` inset keeps
+                        // the static position, i.e. the flow offset relative to
+                        // the immediate parent (`offset_in_subtree`). For a
+                        // directly-nested abs the immediate parent IS the
+                        // positioned ancestor, so both bases coincide and this
+                        // is a no-op; they diverge only across a static
+                        // intermediate.
+                        let (explicit_x, explicit_y) = explicit_inset_axes(child);
+                        let base_x = if explicit_x {
+                            child_cb_anchor.0
+                        } else {
+                            offset_in_subtree.0
+                        };
+                        let base_y = if explicit_y {
+                            child_cb_anchor.1
+                        } else {
+                            offset_in_subtree.1
+                        };
+                        let nested_offset = (base_x + rel_x, base_y + rel_y);
                         walk(
                             geometry,
                             doc,
@@ -3099,6 +3144,8 @@ fn record_subtree_fragments_at_offset(
                             page_stride_px,
                             descendant_total_pages,
                             may_extend_pages,
+                            child_cb_anchor,
+                            child_cb_size,
                             depth + 1,
                         );
                         continue;
@@ -3128,6 +3175,8 @@ fn record_subtree_fragments_at_offset(
                 page_stride_px,
                 descendant_total_pages,
                 may_extend_pages,
+                child_cb_anchor,
+                child_cb_size,
                 depth + 1,
             );
             if has_contain_size(child) {
@@ -3147,8 +3196,34 @@ fn record_subtree_fragments_at_offset(
         page_stride_px,
         total_pages,
         may_extend_pages,
+        // Initial CB: the subtree root is the body-direct abs (positioned),
+        // so it overrides these on the first frame — seed with the root's own
+        // anchor/size for correctness if that ever changes.
+        (0.0, 0.0),
+        (0.0, 0.0),
         0,
     );
+}
+
+/// Which axes of an out-of-flow element carry an explicit (length /
+/// percentage) inset, as `(x, y)`. An explicit inset is resolved against the
+/// containing block; an `auto` inset falls back to the static (flow) position.
+/// Mirrors the per-axis idiom in [`resolve_viewport_cb_location`].
+fn explicit_inset_axes(node: &blitz_dom::Node) -> (bool, bool) {
+    use ::style::values::generics::position::GenericInset;
+
+    fn is_length_percentage(inset: &::style::values::computed::position::Inset) -> bool {
+        matches!(inset, GenericInset::LengthPercentage(_))
+    }
+
+    let Some(styles) = node.primary_styles() else {
+        return (false, false);
+    };
+    let pos = styles.get_position();
+    (
+        is_length_percentage(&pos.left) || is_length_percentage(&pos.right),
+        is_length_percentage(&pos.top) || is_length_percentage(&pos.bottom),
+    )
 }
 
 fn is_out_of_flow_positioned(node: &blitz_dom::Node) -> bool {

@@ -157,8 +157,8 @@ for child_id in children {
         // fulgur-puml 原因①: nested abs を訪問する。位置は CB (= 現 node の box) 基準で解決し、
         // root 空間 offset に変換してから recurse する (trap A)。
         let (cw, ch) = (child.final_layout.size.width, child.final_layout.size.height);
-        let (cb_w, ch_h) = (node.final_layout.size.width, node.final_layout.size.height);
-        let (rel_x, rel_y) = resolve_viewport_cb_location(child, cw, ch, cb_w, ch_h)
+        let (cb_w, cb_h) = (node.final_layout.size.width, node.final_layout.size.height);
+        let (rel_x, rel_y) = resolve_viewport_cb_location(child, cw, ch, cb_w, cb_h)
             .unwrap_or((child.final_layout.location.x, child.final_layout.location.y));
         let nested_offset = (offset_in_subtree.0 + rel_x, offset_in_subtree.1 + rel_y);
         walk(geometry, doc, child_id, nested_offset, root_xy_for_paging, body_offset,

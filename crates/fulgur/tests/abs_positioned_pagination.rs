@@ -274,6 +274,42 @@ fn nested_abs_offset_resolves_against_cb_not_flow() {
     );
 }
 
+/// fulgur-puml (CB = nearest positioned ancestor, addressing coderabbit/gemini
+/// review): when a nested abs's immediate parent is `position:static`, its
+/// containing block is the nearest POSITIONED ancestor, not the static parent
+/// (CSS 2.1 §10.1.4). Here B's `top:0` is relative to A (the abs), so B starts
+/// on page 1 and its `height:300vh` drives exactly 3 pages — even though a
+/// 200pt spacer pushes B's static wrapper down. The buggy immediate-parent
+/// anchoring would start B at 200pt and inflate the page count to 5.
+#[test]
+fn nested_abs_cb_is_nearest_positioned_ancestor_not_static_parent() {
+    let html = r#"<!doctype html><html><head><style>
+        @page { size: 100pt 100pt; margin: 0; }
+        body { margin: 0; }
+    </style></head><body>
+      <div style="position:absolute; top:0;">
+        <div style="height:200pt;"></div>
+        <div>
+          <div style="position:absolute; top:0; height:300vh; width:10px;"></div>
+        </div>
+      </div>
+    </body></html>"#;
+    let engine = Engine::builder()
+        .page_size(PageSize {
+            width: 100.0,
+            height: 100.0,
+        })
+        .margin(Margin::uniform(0.0))
+        .build();
+    let pdf = engine.render_html(html).expect("render");
+    assert_eq!(
+        page_count(&pdf),
+        3,
+        "nested abs under a static parent must anchor to the positioned ancestor (A, top:0), \
+         not the static parent's 200pt flow offset"
+    );
+}
+
 /// fulgur-puml (end-side margin fix C): an end-anchored absolute element
 /// positions its *margin box* against the CB edge, so `bottom:0;
 /// margin-bottom:N` must sit N above a plain `bottom:0` sibling. Before the
