@@ -3221,12 +3221,20 @@ fn resolve_viewport_cb_location(
     // back to Taffy's static position (`final_layout.location`). Caller
     // unwraps the returned tuple against that fallback, so we surface
     // only the axes that have an explicit inset.
+    // End-side (right / bottom) anchoring positions the element's *margin
+    // box* edge against the CB edge, so the border-box origin must back off
+    // by the used end-side margin (CSS 2.1 §10.3.7 / §10.6.4). Taffy resolves
+    // these into `final_layout.margin`; without subtracting them an abs with
+    // `bottom:0; margin-bottom:2em` collapses onto `bottom:0`. This is a
+    // distinct end-side-margin bug from nested-abs pagination — see the
+    // `abs_bottom_margin_offsets_above_sibling` regression test.
+    let margin = node.final_layout.margin;
     let x = if let Some(l) = left {
         l
     } else if let Some(r) = right {
         // To mirror Taffy's internal end-side layout, collapse viewport
         // edge before subtracting element width.
-        (cb_w_px - r).round() - el_w_px.round()
+        (cb_w_px - r).round() - margin.right - el_w_px.round()
     } else {
         node.final_layout.location.x
     };
@@ -3237,7 +3245,7 @@ fn resolve_viewport_cb_location(
         // first round viewport location, then subtract rounded element
         // height. This keeps fixed/abs reference paths aligned to one
         // px boundary when cb height / element size are sub-pixel.
-        (cb_h_px - b).round() - el_h_px.round()
+        (cb_h_px - b).round() - margin.bottom - el_h_px.round()
     } else {
         node.final_layout.location.y
     };

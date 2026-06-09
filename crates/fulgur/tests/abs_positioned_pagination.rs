@@ -5,6 +5,9 @@
 //! CSS 2.1 §10.6.4: the height of an absolutely-positioned element does not
 //! contribute to the height of its containing block's normal flow.
 
+mod support;
+use support::content_stream::text_matrix_ys;
+
 use fulgur::{Engine, Margin, PageSize};
 
 fn page_count(pdf: &[u8]) -> usize {
@@ -216,9 +219,11 @@ fn nested_abs_height_drives_page_count() {
     );
 }
 
-/// fulgur-puml 原因②: in-flow があっても abs はページ拡張できる (Fix #2 で green になる想定)。
+/// fulgur-xa9q: in-flow があっても abs はページ拡張できるべき (Chrome 準拠)。
+/// fulgur-puml では未対応 — naive な may_extend 緩和は fixedpos-008 /
+/// page-background-003 を regress させると bisect で判明したため別 issue に分離。
 #[test]
-#[ignore = "green after fulgur-puml #2 (may_extend_pages relaxation)"]
+#[ignore = "tracked by fulgur-xa9q: abs page extension with in-flow content"]
 fn abs_extends_pages_despite_in_flow_content() {
     let html = r#"<!doctype html><html><head><style>
         @page { size: 100pt 100pt; margin: 0; }
@@ -266,5 +271,45 @@ fn nested_abs_offset_resolves_against_cb_not_flow() {
         page_count(&pdf),
         5,
         "inner abs top:300vh under outer top:100vh must land on page 5 (400vh)"
+    );
+}
+
+/// fulgur-puml (end-side margin fix C): an end-anchored absolute element
+/// positions its *margin box* against the CB edge, so `bottom:0;
+/// margin-bottom:N` must sit N above a plain `bottom:0` sibling. Before the
+/// fix `resolve_viewport_cb_location` dropped the end-side margin and both
+/// collapsed onto the same baseline (the fixedpos-004/005/006 ref-side
+/// overlap that blocked promotion). This is a distinct bug from nested-abs
+/// pagination — assert the vertical offset directly via the text matrices.
+#[test]
+fn abs_bottom_margin_offsets_above_sibling() {
+    let html = r#"<!doctype html><html><head><style>
+        @page { size: 100pt 100pt; margin: 0; }
+        body { margin: 0; }
+    </style></head><body>
+      <div style="position:absolute; bottom:0; margin-bottom:30pt;">A</div>
+      <div style="position:absolute; bottom:0;">B</div>
+    </body></html>"#;
+    let engine = Engine::builder()
+        .page_size(PageSize {
+            width: 100.0,
+            height: 100.0,
+        })
+        .margin(Margin::uniform(0.0))
+        .build();
+    let pdf = engine.render_html(html).expect("render");
+
+    let Some(ys) = text_matrix_ys(&pdf) else {
+        eprintln!("qpdf not installed — skipping");
+        return;
+    };
+    // Exactly the two single-glyph runs "A" and "B".
+    assert_eq!(ys.len(), 2, "expected two text runs, got {ys:?}");
+    let gap = (ys[0] - ys[1]).abs();
+    // margin-bottom:30pt must separate the two baselines by ~30pt. The bug
+    // (margin dropped) collapses them to gap ~= 0.
+    assert!(
+        (29.0..=31.0).contains(&gap),
+        "bottom:0 + margin-bottom:30pt must sit ~30pt above a bottom:0 sibling; got baselines {ys:?} (gap {gap})"
     );
 }
