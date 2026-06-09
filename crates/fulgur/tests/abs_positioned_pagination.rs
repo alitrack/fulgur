@@ -188,3 +188,82 @@ fn abs_positioned_does_not_force_extra_pages_for_short_flow() {
         "300pt-tall abs div must not force extra pages when in-flow content fits a single page; got {pages}"
     );
 }
+
+/// fulgur-puml 原因①: nested abs (abs 内 abs) の高さがページ数を駆動する。
+#[test]
+fn nested_abs_height_drives_page_count() {
+    let html = r#"<!doctype html><html><head><style>
+        @page { size: 100pt 100pt; margin: 0; }
+        body { margin: 0; }
+    </style></head><body>
+      <div style="position:absolute;">
+        outer
+        <div style="position:absolute; top:0; height:300vh; width:50px;"></div>
+      </div>
+    </body></html>"#;
+    let engine = Engine::builder()
+        .page_size(PageSize {
+            width: 100.0,
+            height: 100.0,
+        })
+        .margin(Margin::uniform(0.0))
+        .build();
+    let pdf = engine.render_html(html).expect("render");
+    assert_eq!(
+        page_count(&pdf),
+        3,
+        "nested abs height:300vh must drive 3 pages"
+    );
+}
+
+/// fulgur-puml 原因②: in-flow があっても abs はページ拡張できる (Fix #2 で green になる想定)。
+#[test]
+fn abs_extends_pages_despite_in_flow_content() {
+    let html = r#"<!doctype html><html><head><style>
+        @page { size: 100pt 100pt; margin: 0; }
+        body { margin: 0; }
+    </style></head><body>
+      in-flow text here
+      <div style="position:absolute; bottom:-200vh;">x</div>
+    </body></html>"#;
+    let engine = Engine::builder()
+        .page_size(PageSize {
+            width: 100.0,
+            height: 100.0,
+        })
+        .margin(Margin::uniform(0.0))
+        .build();
+    let pdf = engine.render_html(html).expect("render");
+    assert_eq!(
+        page_count(&pdf),
+        3,
+        "abs bottom:-200vh must extend to 3 pages even with in-flow content"
+    );
+}
+
+/// fulgur-puml trap A: nested abs の offset は CB 基準で解決される。
+#[test]
+fn nested_abs_offset_resolves_against_cb_not_flow() {
+    let html = r#"<!doctype html><html><head><style>
+        @page { size: 100pt 100pt; margin: 0; }
+        body { margin: 0; }
+    </style></head><body>
+      <div style="position:absolute; top:100vh;">
+        outer on page 2
+        <div style="position:absolute; top:300vh;">inner on page 5</div>
+      </div>
+    </body></html>"#;
+    let engine = Engine::builder()
+        .page_size(PageSize {
+            width: 100.0,
+            height: 100.0,
+        })
+        .margin(Margin::uniform(0.0))
+        .build();
+    let pdf = engine.render_html(html).expect("render");
+    assert_eq!(
+        page_count(&pdf),
+        5,
+        "inner abs top:300vh under outer top:100vh must land on page 5 (400vh)"
+    );
+}
