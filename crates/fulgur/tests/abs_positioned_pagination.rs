@@ -310,6 +310,59 @@ fn nested_abs_cb_is_nearest_positioned_ancestor_not_static_parent() {
     );
 }
 
+/// fulgur-puml (CB = positioned ancestor's PADDING box, addressing coderabbit
+/// re-review): a nested abs `top:0` sits at the ancestor's padding edge, so a
+/// top border on the ancestor pushes it down by the border width. Compare
+/// with vs without the border — the nested text baseline must shift by ~the
+/// border (a border-box CB would leave it unmoved). 40px border = 30pt.
+#[test]
+fn nested_abs_cb_uses_positioned_ancestor_padding_box() {
+    let render = |border: &str| -> Vec<u8> {
+        let html = format!(
+            r#"<!doctype html><html><head><style>
+            @page {{ size: 200pt 200pt; margin: 0; }}
+            body {{ margin: 0; }}
+        </style></head><body>
+          <div style="position:absolute; top:0; {border} width:100px; height:100px;">
+            <div style="position:absolute; top:0;">X</div>
+          </div>
+        </body></html>"#
+        );
+        let engine = Engine::builder()
+            .page_size(PageSize {
+                width: 200.0,
+                height: 200.0,
+            })
+            .margin(Margin::uniform(0.0))
+            .build();
+        engine.render_html(&html).expect("render")
+    };
+    let pdf_plain = render("");
+    let pdf_border = render("border-top: 40px solid black;");
+    let (Some(ys_plain), Some(ys_border)) =
+        (text_matrix_ys(&pdf_plain), text_matrix_ys(&pdf_border))
+    else {
+        eprintln!("qpdf not installed — skipping");
+        return;
+    };
+    assert_eq!(ys_plain.len(), 1, "one text run expected, got {ys_plain:?}");
+    assert_eq!(
+        ys_border.len(),
+        1,
+        "one text run expected, got {ys_border:?}"
+    );
+    let delta = ys_border[0] - ys_plain[0];
+    // 40px top border = 30pt; the padding-box CB pushes the nested abs down by
+    // it. A border-box CB would give delta ~= 0.
+    assert!(
+        (28.0..=32.0).contains(&delta),
+        "padding-box CB must shift the nested abs down by ~30pt (40px border); \
+         got delta {delta} (plain={}, border={})",
+        ys_plain[0],
+        ys_border[0]
+    );
+}
+
 /// fulgur-puml (end-side margin fix C): an end-anchored absolute element
 /// positions its *margin box* against the CB edge, so `bottom:0;
 /// margin-bottom:N` must sit N above a plain `bottom:0` sibling. Before the

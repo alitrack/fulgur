@@ -2962,15 +2962,27 @@ fn record_subtree_fragments_at_offset(
         // inherited nearest-positioned ancestor (`cb_anchor`/`cb_size`). A
         // `position: static` element does not establish a CB, so an abs child
         // beneath it anchors to the same ancestor its static parent does.
+        //
+        // The CB is the positioned ancestor's *padding box* (CSS 2.1
+        // §10.1.4): the anchor backs in by its top/left border and the size
+        // drops both borders. `offset_in_subtree` is `node`'s border-box
+        // origin, so add the border to reach the padding edge.
         let node_positioned = {
             use ::style::properties::longhands::position::computed_value::T as Pos;
             node.primary_styles()
                 .is_some_and(|s| !matches!(s.get_box().clone_position(), Pos::Static))
         };
         let (child_cb_anchor, child_cb_size) = if node_positioned {
+            let border = node.final_layout.border;
             (
-                offset_in_subtree,
-                (node.final_layout.size.width, node.final_layout.size.height),
+                (
+                    offset_in_subtree.0 + border.left,
+                    offset_in_subtree.1 + border.top,
+                ),
+                (
+                    node.final_layout.size.width - border.left - border.right,
+                    node.final_layout.size.height - border.top - border.bottom,
+                ),
             )
         } else {
             (cb_anchor, cb_size)
@@ -3099,12 +3111,9 @@ fn record_subtree_fragments_at_offset(
                             child.final_layout.size.height,
                         );
                         // Resolve against the nearest positioned ancestor's
-                        // box (`child_cb_*`), NOT the immediate DOM parent —
-                        // a `position: static` parent does not establish a CB
-                        // (CSS 2.1 §10.1.4). `child_cb_size` is that ancestor's
-                        // border box; the spec CB is its padding box — harmless
-                        // for `vh` insets (CB-independent), a minor error for
-                        // `%` insets only when the CB has non-zero borders.
+                        // padding box (`child_cb_*`), NOT the immediate DOM
+                        // parent — a `position: static` parent does not
+                        // establish a CB (CSS 2.1 §10.1.4).
                         let (rel_x, rel_y) = resolve_viewport_cb_location(
                             child,
                             child_w,
@@ -5378,6 +5387,42 @@ h2 { string-set: chapter-title content(text); }
             None
         }
         walk(base, root_id, tag)
+    }
+
+    /// fulgur-puml: `explicit_inset_axes` must classify each axis as
+    /// explicit (length/percentage inset present) vs auto, since the nested-
+    /// abs base selection depends on it. A silent regression here would
+    /// mis-anchor abs descendants across a static intermediate.
+    #[test]
+    fn explicit_inset_axes_classifies_per_axis() {
+        use std::ops::Deref;
+        // (fragment, (x_explicit, y_explicit))
+        let cases: &[(&str, (bool, bool))] = &[
+            ("<div style=\"position:absolute\"></div>", (false, false)),
+            (
+                "<div style=\"position:absolute; top:10px\"></div>",
+                (false, true),
+            ),
+            (
+                "<div style=\"position:absolute; right:0\"></div>",
+                (true, false),
+            ),
+            (
+                "<div style=\"position:absolute; left:0; right:0\"></div>",
+                (true, false),
+            ),
+            (
+                "<div style=\"position:absolute; top:0; left:0\"></div>",
+                (true, true),
+            ),
+        ];
+        for (frag, expected) in cases {
+            let html = format!("<html><body>{frag}</body></html>");
+            let doc = parse(&html, 600.0);
+            let id = find_node_by_local_name(&doc, "div").expect("div present");
+            let node = doc.deref().get_node(id).expect("node present");
+            assert_eq!(explicit_inset_axes(node), *expected, "fragment: {frag}");
+        }
     }
 
     /// coderabbit: body containing only a `position: running()` element
