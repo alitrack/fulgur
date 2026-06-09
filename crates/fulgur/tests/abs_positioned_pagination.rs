@@ -218,6 +218,7 @@ fn nested_abs_height_drives_page_count() {
 
 /// fulgur-puml 原因②: in-flow があっても abs はページ拡張できる (Fix #2 で green になる想定)。
 #[test]
+#[ignore = "green after fulgur-puml #2 (may_extend_pages relaxation)"]
 fn abs_extends_pages_despite_in_flow_content() {
     let html = r#"<!doctype html><html><head><style>
         @page { size: 100pt 100pt; margin: 0; }

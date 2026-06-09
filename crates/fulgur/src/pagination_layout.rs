@@ -3063,37 +3063,49 @@ fn record_subtree_fragments_at_offset(
             //     abs root anchor; viewport-relative (`vh`) insets are
             //     CB-independent, so the CB dims only affect percentage
             //     insets.
-            if is_out_of_flow_positioned(child) {
+            {
                 use ::style::properties::longhands::position::computed_value::T as Pos;
-                let is_abs = child
-                    .primary_styles()
-                    .is_some_and(|s| matches!(s.get_box().clone_position(), Pos::Absolute));
-                if !is_abs {
-                    continue;
+                match child.primary_styles().map(|s| s.get_box().clone_position()) {
+                    // Fixed is handled by its own pass; skip here.
+                    Some(Pos::Fixed) => continue,
+                    Some(Pos::Absolute) => {
+                        let (child_w, child_h) = (
+                            child.final_layout.size.width,
+                            child.final_layout.size.height,
+                        );
+                        // `final_layout.size` is the child's border box; the CSS
+                        // containing block for an abs descendant is the positioned
+                        // ancestor's *padding* box. Harmless for `vh` insets (CB-
+                        // independent); only a minor error for `%` insets when the
+                        // CB has non-zero borders.
+                        let (cb_w, cb_h) =
+                            (node.final_layout.size.width, node.final_layout.size.height);
+                        let (rel_x, rel_y) =
+                            resolve_viewport_cb_location(child, child_w, child_h, cb_w, cb_h)
+                                .unwrap_or((
+                                    child.final_layout.location.x,
+                                    child.final_layout.location.y,
+                                ));
+                        let nested_offset =
+                            (offset_in_subtree.0 + rel_x, offset_in_subtree.1 + rel_y);
+                        walk(
+                            geometry,
+                            doc,
+                            child_id,
+                            nested_offset,
+                            root_xy_for_paging,
+                            body_offset,
+                            page_h_px,
+                            page_stride_px,
+                            descendant_total_pages,
+                            may_extend_pages,
+                            depth + 1,
+                        );
+                        continue;
+                    }
+                    // In-flow (or unstyled): fall through to the normal path below.
+                    _ => {}
                 }
-                let (child_w, child_h) = (
-                    child.final_layout.size.width,
-                    child.final_layout.size.height,
-                );
-                let (cb_w, cb_h) = (node.final_layout.size.width, node.final_layout.size.height);
-                let (rel_x, rel_y) =
-                    resolve_viewport_cb_location(child, child_w, child_h, cb_w, cb_h)
-                        .unwrap_or((child.final_layout.location.x, child.final_layout.location.y));
-                let nested_offset = (offset_in_subtree.0 + rel_x, offset_in_subtree.1 + rel_y);
-                walk(
-                    geometry,
-                    doc,
-                    child_id,
-                    nested_offset,
-                    root_xy_for_paging,
-                    body_offset,
-                    page_h_px,
-                    page_stride_px,
-                    descendant_total_pages,
-                    may_extend_pages,
-                    depth + 1,
-                );
-                continue;
             }
             // Skip whitespace-only text (matches fragmenter).
             if let Some(text) = child.text_data()
