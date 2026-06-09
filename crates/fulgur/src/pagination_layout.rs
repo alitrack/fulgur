@@ -3227,7 +3227,11 @@ fn resolve_viewport_cb_location(
     // these into `final_layout.margin`; without subtracting them an abs with
     // `bottom:0; margin-bottom:2em` collapses onto `bottom:0`. This is a
     // distinct end-side-margin bug from nested-abs pagination — see the
-    // `abs_bottom_margin_offsets_above_sibling` regression test.
+    // `abs_bottom_margin_offsets_above_sibling` regression test. NOTE: this
+    // helper resolves `position: fixed` elements too (all three callers), so
+    // the margin term corrects fixed end-anchoring as well as abs. The margin
+    // is subtracted unrounded between the two rounded terms; fixedpos-004's
+    // pixel-exact reftest is the validator for this rounding choice.
     let margin = node.final_layout.margin;
     let x = if let Some(l) = left {
         l
