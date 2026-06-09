@@ -902,4 +902,161 @@ mod tests {
         // Marker is still inserted at index 0.
         assert_eq!(out.paragraphs[&5].lines[0].items.len(), 2);
     }
+
+    // ── smoke tests via Engine::render_html (Blitz-dependent paths) ──────────
+    //
+    // These exercises cover branches in `try_convert` and `build_list_item_body`
+    // that cannot be reached without a live Blitz document.  They mirror the
+    // pattern used in render.rs `#[cfg(test)]` smoke helpers.
+
+    fn render_list_html(html: &str) -> Vec<u8> {
+        crate::engine::Engine::builder()
+            .build()
+            .render_html(html)
+            .expect("render failed")
+    }
+
+    const RED_1X1_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    // try_convert branch 1 (outside marker): opacity < 1.0 on the <li> activates
+    // the `opacity_scope` snapshot path (line 62-63).
+    #[test]
+    fn smoke_outside_marker_with_opacity_scope() {
+        let pdf = render_list_html(
+            r#"<!doctype html><html><body>
+            <ul><li style="opacity:0.5">Faded item</li></ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // try_convert branch 1 (outside marker): overflow:hidden on the <li>
+    // activates the `clipping` snapshot path (line 61-63).
+    #[test]
+    fn smoke_outside_marker_with_overflow_clip() {
+        let pdf = render_list_html(
+            r#"<!doctype html><html><body>
+            <ul><li style="overflow:hidden;height:30px">
+                <div style="height:200px">Clipped content</div>
+            </li></ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // try_convert branch 3 (inside marker, non-inline-root): a numeric
+    // `line-height` multiplier → `LineHeight::Number` arm (line 138).
+    #[test]
+    fn smoke_inside_marker_line_height_number() {
+        let pdf = render_list_html(
+            r#"<!doctype html><html><body>
+            <ul style="list-style-position:inside;line-height:1.5">
+                <li><p>Block child so non-inline-root</p></li>
+            </ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // try_convert branch 3 (inside marker, non-inline-root): an absolute-length
+    // `line-height` → `LineHeight::Length` arm (line 139).
+    #[test]
+    fn smoke_inside_marker_line_height_length() {
+        let pdf = render_list_html(
+            r#"<!doctype html><html><body>
+            <ul style="list-style-position:inside;line-height:24px">
+                <li><p>Block child so non-inline-root</p></li>
+            </ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // try_convert branch 3 (inside marker, non-inline-root): empty <li> with no
+    // children forces the standalone marker-paragraph path (lines 172-203).
+    #[test]
+    fn smoke_inside_empty_li_with_marker() {
+        let pdf = render_list_html(
+            r#"<!doctype html><html><body>
+            <ul style="list-style-position:inside">
+                <li></li>
+                <li>Normal item</li>
+            </ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // build_list_item_body (outside marker): <li> whose only child is a block
+    // element.  The <li> is NOT an inline-root, so the non-inline-root walk
+    // (lines 423-427) is exercised.
+    #[test]
+    fn smoke_outside_marker_with_block_children() {
+        let pdf = render_list_html(
+            r#"<!doctype html><html><body>
+            <ul><li><div style="background:#cef;height:20px">Block child</div></li></ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // build_list_item_body (outside marker, inline-root): a ::before pseudo whose
+    // `content` is an image URL and display is NOT block-outside injects an
+    // InlineImage *before* the paragraph text (lines 336-387).
+    #[test]
+    fn smoke_outside_marker_with_inline_before_image() {
+        let mut bundle = crate::asset::AssetBundle::default();
+        bundle.add_image("dot.png", RED_1X1_PNG.to_vec());
+        bundle.add_css(r#"li::before { content: url("dot.png"); width: 8px; height: 8px; }"#);
+        let pdf = crate::engine::Engine::builder()
+            .assets(bundle)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <ul><li>Item with before image</li></ul>
+                </body></html>"#,
+            )
+            .expect("render failed");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // build_list_item_body (outside marker, inline-root): empty <li> with an
+    // inline ::before image but no text.  `extract_paragraph` returns None so
+    // the `before_inline.is_some()` branch at line 392 is taken.
+    #[test]
+    fn smoke_outside_marker_empty_li_with_inline_before_image() {
+        let mut bundle = crate::asset::AssetBundle::default();
+        bundle.add_image("dot.png", RED_1X1_PNG.to_vec());
+        bundle.add_css(r#"li::before { content: url("dot.png"); width: 8px; height: 8px; }"#);
+        let pdf = crate::engine::Engine::builder()
+            .assets(bundle)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <ul><li></li></ul>
+                </body></html>"#,
+            )
+            .expect("render failed");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // build_list_item_body (outside marker, inline-root): empty <li> with no
+    // text and no inline pseudo images.  Both `paragraph_opt` and
+    // `before_inline`/`after_inline` are None, so the final `else` branch at
+    // line 415 (fall-through to non-inline-root child walk) is exercised.
+    #[test]
+    fn smoke_outside_marker_empty_li_no_pseudos() {
+        let pdf = render_list_html(
+            r#"<!doctype html><html><body>
+            <ul><li></li><li>Next item</li></ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
 }
