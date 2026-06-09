@@ -3048,10 +3048,51 @@ fn record_subtree_fragments_at_offset(
             let Some(child) = doc.get_node(child_id) else {
                 continue;
             };
-            // Skip out-of-flow descendants (handled by their own
-            // pass — `append_position_fixed_fragments` for fixed,
-            // separate body-direct walk for abs).
+            // Out-of-flow descendants:
+            //   - `position: fixed` is a repeat element handled by
+            //     `append_position_fixed_fragments`; skip it here so it
+            //     does not contribute to extent (it would otherwise be
+            //     double-counted).
+            //   - `position: absolute` (fulgur-puml #1): a nested abs's
+            //     height/offset must still drive the page count. Resolve
+            //     its location against ITS containing block (the nearest
+            //     positioned ancestor = the current `node`'s box) via
+            //     `resolve_viewport_cb_location`, fold that CB-relative
+            //     (x, y) into the accumulated `offset_in_subtree`, and
+            //     recurse. `root_xy_for_paging` stays the body-direct
+            //     abs root anchor; viewport-relative (`vh`) insets are
+            //     CB-independent, so the CB dims only affect percentage
+            //     insets.
             if is_out_of_flow_positioned(child) {
+                use ::style::properties::longhands::position::computed_value::T as Pos;
+                let is_abs = child
+                    .primary_styles()
+                    .is_some_and(|s| matches!(s.get_box().clone_position(), Pos::Absolute));
+                if !is_abs {
+                    continue;
+                }
+                let (child_w, child_h) = (
+                    child.final_layout.size.width,
+                    child.final_layout.size.height,
+                );
+                let (cb_w, cb_h) = (node.final_layout.size.width, node.final_layout.size.height);
+                let (rel_x, rel_y) =
+                    resolve_viewport_cb_location(child, child_w, child_h, cb_w, cb_h)
+                        .unwrap_or((child.final_layout.location.x, child.final_layout.location.y));
+                let nested_offset = (offset_in_subtree.0 + rel_x, offset_in_subtree.1 + rel_y);
+                walk(
+                    geometry,
+                    doc,
+                    child_id,
+                    nested_offset,
+                    root_xy_for_paging,
+                    body_offset,
+                    page_h_px,
+                    page_stride_px,
+                    descendant_total_pages,
+                    may_extend_pages,
+                    depth + 1,
+                );
                 continue;
             }
             // Skip whitespace-only text (matches fragmenter).
