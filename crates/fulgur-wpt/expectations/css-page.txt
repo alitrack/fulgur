@@ -31,9 +31,9 @@ SKIP  css/css-page/cssom/page-002.html  # NoMatch
 PASS  css/css-page/fixedpos-001-print.html
 PASS  css/css-page/fixedpos-002-print.html
 PASS  css/css-page/fixedpos-003-print.html
-FAIL  css/css-page/fixedpos-004-print.html  # page count mismatch: test=2 ref=3
-FAIL  css/css-page/fixedpos-005-print.html  # page count mismatch: test=3 ref=5
-FAIL  css/css-page/fixedpos-006-print.html  # page count mismatch: test=3 ref=5
+PASS  css/css-page/fixedpos-004-print.html  # fulgur-puml: nested-abs pagination + end-side margin fix
+FAIL  css/css-page/fixedpos-005-print.html  # fulgur-xa9q: page count test=3 ref=5 (abs page extension with in-flow content)
+FAIL  css/css-page/fixedpos-006-print.html  # fulgur-xa9q: page count test=1 ref=3 (abs page extension with in-flow content)
 FAIL  css/css-page/fixedpos-007-print.html  # page 1 diff: 1765/891662 pixels exceed tol (max_ch=255)
 PASS  css/css-page/fixedpos-008-print.html
 FAIL  css/css-page/fixedpos-009-print.html  # page 1 diff: 216/891662 pixels exceed tol (max_ch=149) — §10.3.7 shrink-to-fit now correct (pencil at bottom-right per spec, was 2738 px wrong); residual is sub-pixel anti-aliasing on the 36×36 mask edge between the test (position:fixed root) and ref (position:absolute inside relative .fakepage) y rounding
