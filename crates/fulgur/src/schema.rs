@@ -792,4 +792,132 @@ mod tests {
         assert_eq!(schema["properties"]["title"]["type"], "string");
         assert_eq!(schema["properties"]["subtitle"]["type"], "string");
     }
+
+    // ── FilterBlock ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn filter_block_collects_body_variables() {
+        let schema =
+            extract_schema("{% filter upper %}{{ name }}{% endfilter %}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["name"]["type"], "string");
+    }
+
+    // ── AutoEscape ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn autoescape_block_collects_body_variables() {
+        let schema = extract_schema(
+            r#"{% autoescape true %}{{ name }}{% endautoescape %}"#,
+            "test.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["name"]["type"], "string");
+    }
+
+    // ── SetBlock ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn setblock_body_is_walked_and_target_does_not_leak() {
+        // {% set x %}...{% endset %} walks the block body but x itself
+        // is a locally-captured string and must not appear as a top-level
+        // schema property.
+        let schema =
+            extract_schema("{% set content %}{{ source_var }}{% endset %}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["source_var"]["type"], "string");
+        assert!(schema["properties"]["content"].is_null());
+    }
+
+    // ── UnaryOp ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn unary_op_collects_operand_variable() {
+        let schema = extract_schema("{{ not flag }}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["flag"]["type"], "string");
+    }
+
+    // ── IfExpr (inline ternary) ───────────────────────────────────────────────
+
+    #[test]
+    fn inline_if_with_else_collects_all_three_parts() {
+        let schema = extract_schema("{{ title if show else fallback }}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["title"]["type"], "string");
+        assert_eq!(schema["properties"]["show"]["type"], "string");
+        assert_eq!(schema["properties"]["fallback"]["type"], "string");
+    }
+
+    #[test]
+    fn inline_if_without_else_collects_value_and_test() {
+        let schema = extract_schema("{{ title if show }}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["title"]["type"], "string");
+        assert_eq!(schema["properties"]["show"]["type"], "string");
+    }
+
+    // ── Test expression (is defined / is …) ──────────────────────────────────
+
+    #[test]
+    fn test_expression_collects_subject_variable() {
+        let schema = extract_schema("{{ value is defined }}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["value"]["type"], "string");
+    }
+
+    // ── BinOp ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn bin_op_collects_both_operands() {
+        let schema = extract_schema("{{ first ~ last }}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["first"]["type"], "string");
+        assert_eq!(schema["properties"]["last"]["type"], "string");
+    }
+
+    // ── Map literal ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn map_literal_collects_value_variables() {
+        let schema =
+            extract_schema(r#"{{ {"label": title, "id": page_id} }}"#, "test.html").unwrap();
+        assert_eq!(schema["properties"]["title"]["type"], "string");
+        assert_eq!(schema["properties"]["page_id"]["type"], "string");
+    }
+
+    // ── value_to_schema edge cases ────────────────────────────────────────────
+
+    #[test]
+    fn schema_with_data_boolean_maps_to_boolean_type() {
+        let data = json!({"active": true});
+        let schema = extract_schema_with_data("{{ active }}", "test.html", &data).unwrap();
+        assert_eq!(schema["properties"]["active"]["type"], "boolean");
+    }
+
+    #[test]
+    fn schema_with_data_null_maps_to_null_type() {
+        let data = json!({"val": null});
+        let schema = extract_schema_with_data("{{ val }}", "test.html", &data).unwrap();
+        assert_eq!(schema["properties"]["val"]["type"], "null");
+    }
+
+    #[test]
+    fn schema_with_data_object_includes_all_nested_properties() {
+        let data = json!({
+            "user": {"name": "Alice", "age": 30, "active": true}
+        });
+        let schema = extract_schema_with_data("{{ user.name }}", "test.html", &data).unwrap();
+        let user = &schema["properties"]["user"];
+        assert_eq!(user["type"], "object");
+        assert_eq!(user["properties"]["name"]["type"], "string");
+        assert_eq!(user["properties"]["age"]["type"], "number");
+        assert_eq!(user["properties"]["active"]["type"], "boolean");
+    }
+
+    #[test]
+    fn schema_with_data_empty_array_omits_items_schema() {
+        // When the sample array is empty, value_to_schema cannot infer an
+        // items schema, so the "items" key must be absent.
+        let data = json!({"tags": []});
+        let schema =
+            extract_schema_with_data("{% for t in tags %}{{ t }}{% endfor %}", "test.html", &data)
+                .unwrap();
+        let tags = &schema["properties"]["tags"];
+        assert_eq!(tags["type"], "array");
+        assert!(tags.get("items").is_none() || tags["items"].is_null());
+    }
 }
