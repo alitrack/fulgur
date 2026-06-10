@@ -2928,6 +2928,13 @@ fn record_subtree_fragments_at_offset(
         page_stride_px: f32,
         total_pages: u32,
         may_extend_pages: bool,
+        // Subtree-offset and border-box size of the nearest positioned
+        // ancestor of `node_id` — the containing block that `node_id`'s
+        // out-of-flow children resolve their explicit insets against (CSS
+        // 2.1 §10.1.4). The body-direct abs at the subtree root is itself
+        // positioned, so it overrides these on the first frame.
+        cb_anchor: (f32, f32),
+        cb_size: (f32, f32),
         depth: usize,
     ) {
         if depth >= crate::MAX_DOM_DEPTH {
@@ -2949,6 +2956,36 @@ fn record_subtree_fragments_at_offset(
             } else {
                 node.children.clone()
             }
+        };
+        // The containing block for THIS node's out-of-flow children is
+        // `node` itself when `node` is positioned (non-static), otherwise the
+        // inherited nearest-positioned ancestor (`cb_anchor`/`cb_size`). A
+        // `position: static` element does not establish a CB, so an abs child
+        // beneath it anchors to the same ancestor its static parent does.
+        //
+        // The CB is the positioned ancestor's *padding box* (CSS 2.1
+        // §10.1.4): the anchor backs in by its top/left border and the size
+        // drops both borders. `offset_in_subtree` is `node`'s border-box
+        // origin, so add the border to reach the padding edge.
+        let node_positioned = {
+            use ::style::properties::longhands::position::computed_value::T as Pos;
+            node.primary_styles()
+                .is_some_and(|s| !matches!(s.get_box().clone_position(), Pos::Static))
+        };
+        let (child_cb_anchor, child_cb_size) = if node_positioned {
+            let border = node.final_layout.border;
+            (
+                (
+                    offset_in_subtree.0 + border.left,
+                    offset_in_subtree.1 + border.top,
+                ),
+                (
+                    node.final_layout.size.width - border.left - border.right,
+                    node.final_layout.size.height - border.top - border.bottom,
+                ),
+            )
+        } else {
+            (cb_anchor, cb_size)
         };
         // Page assignment is based on the un-compensated viewport-CB
         // resolved position (the actual paint location). Storage is
@@ -3048,11 +3085,83 @@ fn record_subtree_fragments_at_offset(
             let Some(child) = doc.get_node(child_id) else {
                 continue;
             };
-            // Skip out-of-flow descendants (handled by their own
-            // pass — `append_position_fixed_fragments` for fixed,
-            // separate body-direct walk for abs).
-            if is_out_of_flow_positioned(child) {
-                continue;
+            // Out-of-flow descendants:
+            //   - `position: fixed` is a repeat element handled by
+            //     `append_position_fixed_fragments`; skip it here so it
+            //     does not contribute to extent (it would otherwise be
+            //     double-counted).
+            //   - `position: absolute` (fulgur-puml #1): a nested abs's
+            //     height/offset must still drive the page count. Resolve
+            //     its location against ITS containing block (the nearest
+            //     positioned ancestor = the current `node`'s box) via
+            //     `resolve_viewport_cb_location`, fold that CB-relative
+            //     (x, y) into the accumulated `offset_in_subtree`, and
+            //     recurse. `root_xy_for_paging` stays the body-direct
+            //     abs root anchor; viewport-relative (`vh`) insets are
+            //     CB-independent, so the CB dims only affect percentage
+            //     insets.
+            {
+                use ::style::properties::longhands::position::computed_value::T as Pos;
+                match child.primary_styles().map(|s| s.get_box().clone_position()) {
+                    // Fixed is handled by its own pass; skip here.
+                    Some(Pos::Fixed) => continue,
+                    Some(Pos::Absolute) => {
+                        let (child_w, child_h) = (
+                            child.final_layout.size.width,
+                            child.final_layout.size.height,
+                        );
+                        // Resolve against the nearest positioned ancestor's
+                        // padding box (`child_cb_*`), NOT the immediate DOM
+                        // parent — a `position: static` parent does not
+                        // establish a CB (CSS 2.1 §10.1.4).
+                        let (rel_x, rel_y) = resolve_viewport_cb_location(
+                            child,
+                            child_w,
+                            child_h,
+                            child_cb_size.0,
+                            child_cb_size.1,
+                        )
+                        .unwrap_or((child.final_layout.location.x, child.final_layout.location.y));
+                        // Per-axis anchor: an explicit inset is relative to the
+                        // CB origin (`child_cb_anchor`); an `auto` inset keeps
+                        // the static position, i.e. the flow offset relative to
+                        // the immediate parent (`offset_in_subtree`). For a
+                        // directly-nested abs the immediate parent IS the
+                        // positioned ancestor, so both bases coincide and this
+                        // is a no-op; they diverge only across a static
+                        // intermediate.
+                        let (explicit_x, explicit_y) = explicit_inset_axes(child);
+                        let base_x = if explicit_x {
+                            child_cb_anchor.0
+                        } else {
+                            offset_in_subtree.0
+                        };
+                        let base_y = if explicit_y {
+                            child_cb_anchor.1
+                        } else {
+                            offset_in_subtree.1
+                        };
+                        let nested_offset = (base_x + rel_x, base_y + rel_y);
+                        walk(
+                            geometry,
+                            doc,
+                            child_id,
+                            nested_offset,
+                            root_xy_for_paging,
+                            body_offset,
+                            page_h_px,
+                            page_stride_px,
+                            descendant_total_pages,
+                            may_extend_pages,
+                            child_cb_anchor,
+                            child_cb_size,
+                            depth + 1,
+                        );
+                        continue;
+                    }
+                    // In-flow (or unstyled): fall through to the normal path below.
+                    _ => {}
+                }
             }
             // Skip whitespace-only text (matches fragmenter).
             if let Some(text) = child.text_data()
@@ -3075,6 +3184,8 @@ fn record_subtree_fragments_at_offset(
                 page_stride_px,
                 descendant_total_pages,
                 may_extend_pages,
+                child_cb_anchor,
+                child_cb_size,
                 depth + 1,
             );
             if has_contain_size(child) {
@@ -3094,8 +3205,34 @@ fn record_subtree_fragments_at_offset(
         page_stride_px,
         total_pages,
         may_extend_pages,
+        // Initial CB: the subtree root is the body-direct abs (positioned),
+        // so it overrides these on the first frame — seed with the root's own
+        // anchor/size for correctness if that ever changes.
+        (0.0, 0.0),
+        (0.0, 0.0),
         0,
     );
+}
+
+/// Which axes of an out-of-flow element carry an explicit (length /
+/// percentage) inset, as `(x, y)`. An explicit inset is resolved against the
+/// containing block; an `auto` inset falls back to the static (flow) position.
+/// Mirrors the per-axis idiom in [`resolve_viewport_cb_location`].
+fn explicit_inset_axes(node: &blitz_dom::Node) -> (bool, bool) {
+    use ::style::values::generics::position::GenericInset;
+
+    fn is_length_percentage(inset: &::style::values::computed::position::Inset) -> bool {
+        matches!(inset, GenericInset::LengthPercentage(_))
+    }
+
+    let Some(styles) = node.primary_styles() else {
+        return (false, false);
+    };
+    let pos = styles.get_position();
+    (
+        is_length_percentage(&pos.left) || is_length_percentage(&pos.right),
+        is_length_percentage(&pos.top) || is_length_percentage(&pos.bottom),
+    )
 }
 
 fn is_out_of_flow_positioned(node: &blitz_dom::Node) -> bool {
@@ -3168,12 +3305,24 @@ fn resolve_viewport_cb_location(
     // back to Taffy's static position (`final_layout.location`). Caller
     // unwraps the returned tuple against that fallback, so we surface
     // only the axes that have an explicit inset.
+    // End-side (right / bottom) anchoring positions the element's *margin
+    // box* edge against the CB edge, so the border-box origin must back off
+    // by the used end-side margin (CSS 2.1 §10.3.7 / §10.6.4). Taffy resolves
+    // these into `final_layout.margin`; without subtracting them an abs with
+    // `bottom:0; margin-bottom:2em` collapses onto `bottom:0`. This is a
+    // distinct end-side-margin bug from nested-abs pagination — see the
+    // `abs_bottom_margin_offsets_above_sibling` regression test. NOTE: this
+    // helper resolves `position: fixed` elements too (all three callers), so
+    // the margin term corrects fixed end-anchoring as well as abs. The margin
+    // is subtracted unrounded between the two rounded terms; fixedpos-004's
+    // pixel-exact reftest is the validator for this rounding choice.
+    let margin = node.final_layout.margin;
     let x = if let Some(l) = left {
         l
     } else if let Some(r) = right {
         // To mirror Taffy's internal end-side layout, collapse viewport
         // edge before subtracting element width.
-        (cb_w_px - r).round() - el_w_px.round()
+        (cb_w_px - r).round() - margin.right - el_w_px.round()
     } else {
         node.final_layout.location.x
     };
@@ -3184,7 +3333,7 @@ fn resolve_viewport_cb_location(
         // first round viewport location, then subtract rounded element
         // height. This keeps fixed/abs reference paths aligned to one
         // px boundary when cb height / element size are sub-pixel.
-        (cb_h_px - b).round() - el_h_px.round()
+        (cb_h_px - b).round() - margin.bottom - el_h_px.round()
     } else {
         node.final_layout.location.y
     };
@@ -5238,6 +5387,42 @@ h2 { string-set: chapter-title content(text); }
             None
         }
         walk(base, root_id, tag)
+    }
+
+    /// fulgur-puml: `explicit_inset_axes` must classify each axis as
+    /// explicit (length/percentage inset present) vs auto, since the nested-
+    /// abs base selection depends on it. A silent regression here would
+    /// mis-anchor abs descendants across a static intermediate.
+    #[test]
+    fn explicit_inset_axes_classifies_per_axis() {
+        use std::ops::Deref;
+        // (fragment, (x_explicit, y_explicit))
+        let cases: &[(&str, (bool, bool))] = &[
+            ("<div style=\"position:absolute\"></div>", (false, false)),
+            (
+                "<div style=\"position:absolute; top:10px\"></div>",
+                (false, true),
+            ),
+            (
+                "<div style=\"position:absolute; right:0\"></div>",
+                (true, false),
+            ),
+            (
+                "<div style=\"position:absolute; left:0; right:0\"></div>",
+                (true, false),
+            ),
+            (
+                "<div style=\"position:absolute; top:0; left:0\"></div>",
+                (true, true),
+            ),
+        ];
+        for (frag, expected) in cases {
+            let html = format!("<html><body>{frag}</body></html>");
+            let doc = parse(&html, 600.0);
+            let id = find_node_by_local_name(&doc, "div").expect("div present");
+            let node = doc.deref().get_node(id).expect("node present");
+            assert_eq!(explicit_inset_axes(node), *expected, "fragment: {frag}");
+        }
     }
 
     /// coderabbit: body containing only a `position: running()` element
