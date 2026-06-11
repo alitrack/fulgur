@@ -5800,7 +5800,8 @@ mod tests {
 
     #[test]
     fn render_smoke_box_shadow_inset() {
-        // Exercises the inset shadow branch in draw_single_box_shadow.
+        // Verifies that inset shadows are safely ignored/skipped during conversion
+        // (shadow.rs skips them before they reach draw_single_box_shadow).
         let pdf = render_html(
             r#"<!doctype html><html><body>
             <div style="width:100px;height:60px;background:#eee;
@@ -5944,7 +5945,7 @@ mod tests {
             .keywords(["rust", "pdf", "test"])
             .creator("fulgur-test")
             .producer("krilla")
-            .creation_date("D:20260611120000Z")
+            .creation_date("2026-06-11T12:00:00Z")
             .build()
             .render_html(r#"<!doctype html><html><body><p>Metadata test</p></body></html>"#)
             .expect("render");
