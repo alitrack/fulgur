@@ -32,6 +32,14 @@ jobs:
             runner: ubuntu-24.04-arm
             manylinux: "2014"
             rustflags: ""
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            manylinux: musllinux_1_2
+            rustflags: ""
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            manylinux: musllinux_1_2
+            rustflags: ""
           - target: x86_64-apple-darwin
             runner: macos-15-intel
             rustflags: ""
@@ -167,6 +175,44 @@ jobs:
           print(f'OK: {len(pdf)} bytes')
           "
 
+  smoke-test-musl:
+    # Verify musllinux wheels on an actual Alpine (musl) environment.
+    # Alpine runs via `docker run` rather than `container:` because JavaScript
+    # actions (download-artifact) inside Alpine containers are only supported
+    # on x64 runners — the arm64 runner fails with "JavaScript Actions in
+    # Alpine containers are only supported on x64 Linux runners". Alpine's
+    # Python is PEP 668 externally-managed, so the wheel installs into a venv.
+    name: Smoke test (Alpine / ${{ matrix.target }})
+    needs: [build-wheels]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist
+      - name: Smoke test in Alpine container
+        run: |
+          docker run --rm -v "$PWD/dist:/dist" alpine:3.24 sh -ec '
+          apk add --no-cache python3 py3-pip
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install /dist/*.whl
+          /tmp/venv/bin/python -c "
+          import pyfulgur
+          engine = pyfulgur.Engine()
+          pdf = engine.render_html(\"<p>hi</p>\")
+          assert isinstance(pdf, (bytes, bytearray)), type(pdf)
+          assert len(pdf) > 100, len(pdf)
+          print(f\"OK: {len(pdf)} bytes\")
+          "'
+
   # release-prepare.yml が release PR に `release:skip-bindings` ラベルを付けて
   # いれば bindings publish を丸ごと skip する。release event は PR コンテキストを
   # 持たないため、tag → commit → associated PR の順に逆引きしてラベルを参照する。
@@ -202,7 +248,7 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    needs: [build-wheels, build-sdist, smoke-test, smoke-test-sdist, check-skip-label]
+    needs: [build-wheels, build-sdist, smoke-test, smoke-test-sdist, smoke-test-musl, check-skip-label]
     # 本番 PyPI publish は release イベント (release.yml がタグから発火) のみ。
     # workflow_dispatch からは任意の ref を publish できないようにする (security)。
     # 手動検証は publish-testpypi (dry_run=true) を使う。
@@ -220,7 +266,7 @@ jobs:
 
   publish-testpypi:
     name: Publish to TestPyPI
-    needs: [build-wheels, build-sdist, smoke-test, smoke-test-sdist]
+    needs: [build-wheels, build-sdist, smoke-test, smoke-test-sdist, smoke-test-musl]
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run
     runs-on: ubuntu-latest
     environment: testpypi
