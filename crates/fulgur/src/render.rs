@@ -5771,4 +5771,217 @@ mod tests {
             .expect("render");
         assert!(pdf.starts_with(b"%PDF"));
     }
+
+    // --- draw_box_shadows / draw_single_box_shadow / draw_blur_box_shadow ---
+
+    #[test]
+    fn render_smoke_box_shadow_no_blur() {
+        // Exercises draw_single_box_shadow (zero blur radius → sharp shadow path).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:100px;height:60px;background:#fff;
+                        box-shadow:5px 5px 0 rgba(0,0,0,0.5);">shadow</div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_box_shadow_with_blur() {
+        // Exercises draw_blur_box_shadow (non-zero blur radius → blur path).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:100px;height:60px;background:#fff;
+                        box-shadow:0 4px 12px rgba(0,0,0,0.4);">blurred</div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_box_shadow_inset() {
+        // Exercises the inset shadow branch in draw_single_box_shadow.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:100px;height:60px;background:#eee;
+                        box-shadow:inset 3px 3px 6px rgba(0,0,0,0.3);">inset</div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- background gradients ---
+
+    #[test]
+    fn render_smoke_linear_gradient() {
+        // Exercises draw_linear_gradient via draw_background_layer.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:200px;height:100px;
+                        background:linear-gradient(to right,red,blue);"></div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_radial_gradient() {
+        // Exercises draw_radial_gradient via draw_background_layer.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:200px;height:100px;
+                        background:radial-gradient(circle at center,red,blue);"></div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_conic_gradient() {
+        // Exercises draw_conic_gradient via draw_background_layer.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:200px;height:100px;
+                        background:conic-gradient(red,yellow,green,blue,red);"></div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_repeating_linear_gradient() {
+        // Exercises the repeating-linear-gradient path (expand_repeating_stops).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:200px;height:100px;
+                        background:repeating-linear-gradient(45deg,#f00 0,#f00 10px,#00f 10px,#00f 20px);"></div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_multiple_background_layers() {
+        // Exercises draw_background iterating multiple layers (gradient + solid).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:200px;height:100px;
+                        background:linear-gradient(to bottom,rgba(0,0,255,0.4),transparent),#cef;"></div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- background-clip ---
+
+    #[test]
+    fn render_smoke_background_clip_content_box() {
+        // Exercises compute_clip_rect ContentBox branch in draw_background_layer.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:150px;height:80px;padding:12px;border:4px solid #333;
+                        background:#cef;background-clip:content-box;"></div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- CSS multi-column with column-rule ---
+
+    #[test]
+    fn render_smoke_multicol_solid_column_rule() {
+        // Exercises paint_multicol_rule_for_page + build_multicol_stroke (Solid branch).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="columns:2;column-gap:20px;column-rule:2px solid #333;width:400px;">
+              <p>Column one text that is long enough to fill the first column.</p>
+              <p>Column two text that continues into the second column.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_multicol_dashed_column_rule() {
+        // Exercises build_multicol_stroke Dashed branch.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="columns:2;column-gap:20px;column-rule:2px dashed #666;width:400px;">
+              <p>Some text to trigger dashed column rule rendering.</p>
+              <p>More text in the second column for dashed rule.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_multicol_dotted_column_rule() {
+        // Exercises build_multicol_stroke Dotted branch.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="columns:2;column-gap:20px;column-rule:3px dotted #999;width:400px;">
+              <p>Some text to trigger dotted column rule rendering.</p>
+              <p>More text in the second column for dotted rule.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- build_metadata with all optional fields ---
+
+    #[test]
+    fn render_smoke_metadata_all_fields() {
+        // Exercises build_metadata with title, lang, authors, description,
+        // keywords, creator, producer, creation_date all populated.
+        let pdf = crate::engine::Engine::builder()
+            .title("Test Document")
+            .lang("en")
+            .authors(["Alice", "Bob"])
+            .description("A test PDF document")
+            .keywords(["rust", "pdf", "test"])
+            .creator("fulgur-test")
+            .producer("krilla")
+            .creation_date("D:20260611120000Z")
+            .build()
+            .render_html(r#"<!doctype html><html><body><p>Metadata test</p></body></html>"#)
+            .expect("render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- tagged mode + links ---
+
+    #[test]
+    fn render_smoke_link_in_paragraph_tagged() {
+        // Exercises the use_run_tagging path in dispatch_fragment:
+        // tagged=true AND a paragraph containing an <a href> link run.
+        let pdf = crate::engine::Engine::builder()
+            .tagged(true)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <p>Visit <a href="https://example.com">example.com</a> for more.</p>
+                </body></html>"#,
+            )
+            .expect("render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- list-item with overflow:hidden ---
+
+    #[test]
+    fn render_smoke_list_item_overflow_hidden() {
+        // Exercises the list-item branch in draw_under_clip when overflow is hidden.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <ul>
+              <li style="overflow:hidden;width:150px;height:40px;">Clipped list item</li>
+              <li style="overflow:hidden;width:150px;height:40px;">Another clipped item</li>
+            </ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
 }
