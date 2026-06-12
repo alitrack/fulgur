@@ -5771,4 +5771,224 @@ mod tests {
             .expect("render");
         assert!(pdf.starts_with(b"%PDF"));
     }
+
+    // --- dispatch_inline_box_content ---
+
+    #[test]
+    fn render_smoke_inline_block_element() {
+        // An inline-block inside a paragraph routes through
+        // dispatch_inline_box_content (the plain dispatch_fragment path with no
+        // transform/clip/opacity wrapper).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p>Before <span style="display:inline-block;width:40px;height:20px;
+               background:#cdf">box</span> after.</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_inline_block_with_overflow_hidden() {
+        // dispatch_inline_box_content: inline-block with overflow:hidden takes the
+        // draw_under_clip branch.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p>Text <span style="display:inline-block;width:60px;height:30px;
+               overflow:hidden;background:#ffe">
+               <span style="width:200px;height:20px;background:red">wide</span>
+            </span> end.</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_list_item_marker_tagged / tagged list items ---
+
+    #[test]
+    fn render_smoke_tagged_list_items() {
+        // Tagged PDF with a list exercises draw_list_item_marker_tagged (Lbl tag
+        // wrapping of the marker glyph) and the Li/LBody tagging path.
+        let pdf = crate::engine::Engine::builder()
+            .tagged(true)
+            .lang("en")
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <ul>
+                  <li>First item</li>
+                  <li>Second item</li>
+                  <li>Third item</li>
+                </ul>
+                </body></html>"#,
+            )
+            .expect("tagged list render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_tagged_ordered_list() {
+        // Tagged PDF with an ordered list: exercises the counter-text marker path
+        // inside draw_list_item_marker_tagged.
+        let pdf = crate::engine::Engine::builder()
+            .tagged(true)
+            .lang("en")
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <ol>
+                  <li>Alpha</li>
+                  <li>Beta</li>
+                </ol>
+                </body></html>"#,
+            )
+            .expect("tagged ordered list render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- run-tagging path: link in paragraph ---
+
+    #[test]
+    fn render_smoke_tagged_paragraph_with_link() {
+        // In tagged mode, a paragraph containing a link triggers
+        // para_has_link_runs() == true → use_run_tagging = true in dispatch_fragment.
+        // This exercises the `link_run_node_id` set/clear path and the per-run
+        // tagging branch instead of try_start_tagged.
+        let pdf = crate::engine::Engine::builder()
+            .tagged(true)
+            .lang("en")
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <p>Visit <a href="https://example.com">example.com</a> for details.</p>
+                </body></html>"#,
+            )
+            .expect("tagged link render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- paint_multicol_rule_for_page / column-rule ---
+
+    #[test]
+    fn render_smoke_multicol_solid_column_rule() {
+        // A multicol container with column-rule:solid triggers
+        // paint_multicol_rule_for_page → build_multicol_stroke (solid branch).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:2;column-gap:20px;width:400px;
+                        column-rule:2px solid #333">
+              <p>Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_multicol_dashed_column_rule() {
+        // Dashed column-rule exercises the Dashed branch in build_multicol_stroke.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:2;column-gap:24px;width:400px;
+                        column-rule:3px dashed #666">
+              <p>Lorem ipsum dolor sit amet consectetur adipiscing elit.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_multicol_dotted_column_rule() {
+        // Dotted column-rule exercises the Dotted (Round cap) branch.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:2;column-gap:16px;width:400px;
+                        column-rule:2px dotted #999">
+              <p>One two three four five six seven eight nine ten.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- PDF/UA mode ---
+
+    #[test]
+    fn render_smoke_pdf_ua_mode() {
+        // pdf_ua(true) activates Configuration::new_with_validator(Validator::UA1)
+        // in render_v2, exercising that branch. UA-1 requires tagging + title.
+        let pdf = crate::engine::Engine::builder()
+            .pdf_ua(true)
+            .tagged(true)
+            .lang("en")
+            .title("UA Test Doc")
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <h1>Document Title</h1>
+                <p>A paragraph of body text.</p>
+                </body></html>"#,
+            )
+            .expect("PDF/UA render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- BookmarkCollector: headings ---
+
+    #[test]
+    fn render_smoke_bookmarks_headings() {
+        // bookmarks(true) activates the BookmarkCollector branch in render_v2.
+        let pdf = crate::engine::Engine::builder()
+            .bookmarks(true)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <h1>Chapter One</h1>
+                <p>Text under chapter one.</p>
+                <h2>Section 1.1</h2>
+                <p>Text under section.</p>
+                </body></html>"#,
+            )
+            .expect("bookmarks render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- absolutely-positioned child ---
+
+    #[test]
+    fn render_smoke_absolute_positioned_child() {
+        // A div containing an absolutely-positioned child exercises the
+        // positioned-child dispatch path (walk_absolute_children in convert +
+        // the corresponding dispatch_fragment call for the absolute node).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="position:relative;width:200px;height:100px;background:#eef">
+              <div style="position:absolute;top:10px;left:10px;
+                          width:60px;height:30px;background:#f99">abs</div>
+              relative content
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- try_start_tagged: Li variant ---
+
+    #[test]
+    fn render_smoke_tagged_li_inline_root() {
+        // A tagged <li> whose content is an inline root exercises
+        // try_start_tagged's Li branch (returns LBody lbody_id).
+        let pdf = crate::engine::Engine::builder()
+            .tagged(true)
+            .lang("en")
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <ul><li>Only item with inline text content.</li></ul>
+                </body></html>"#,
+            )
+            .expect("li inline-root tagged render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
 }
