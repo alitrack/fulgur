@@ -5771,4 +5771,121 @@ mod tests {
             .expect("render");
         assert!(pdf.starts_with(b"%PDF"));
     }
+
+    // --- Tagged PDF paths ---
+    //
+    // The following smoke tests exercise render paths that are only reachable
+    // when tagging is enabled (`Engine::builder().tagged(true)`). They cover:
+    //   - `try_start_tagged`'s `PdfTag::Li` arm
+    //   - `draw_list_item_marker_tagged`'s tagged branch (lbl_id != None)
+    //   - `finish_tagged` with `PdfTag::LBody`
+    //   - `dispatch_fragment`'s `use_run_tagging = true` for paragraphs with link runs
+    //   - `draw_list_item_with_block`'s `use_run_tagging = true` for list items with link runs
+
+    fn render_html_tagged(html: &str) -> Vec<u8> {
+        crate::engine::Engine::builder()
+            .tagged(true)
+            .build()
+            .render_html(html)
+            .expect("tagged render failed")
+    }
+
+    #[test]
+    fn render_smoke_tagged_unordered_list_li_lbl_path() {
+        // Exercises draw_list_item_marker_tagged's tagged branch: in tagged mode
+        // `canvas.tag_collector` is Some, so `lbl_id` is Some(synthetic_id) and
+        // the `if let (Some(lid), Some(id))` arm records a Lbl struct element.
+        // Also exercises try_start_tagged's PdfTag::Li arm for the list-body
+        // paragraph tagging.
+        let pdf = render_html_tagged(
+            r#"<!doctype html><html><body>
+            <ul><li>Alpha</li><li>Beta</li><li>Gamma</li></ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_tagged_ordered_list_li_body_tagging() {
+        // Same tagged list-item paths for an ordered list: the counter-text
+        // marker still goes through draw_list_item_marker_tagged, and the
+        // paragraph content is tagged via try_start_tagged's PdfTag::Li arm.
+        let pdf = render_html_tagged(
+            r#"<!doctype html><html><body>
+            <ol><li>One</li><li>Two</li><li>Three</li></ol>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_tagged_paragraph_with_link_use_run_tagging() {
+        // Exercises dispatch_fragment's `use_run_tagging = true` path:
+        // when a tagged paragraph has a link run (`para_has_link_runs` returns
+        // true), `canvas.link_run_node_id = Some(node_id)` is set instead of
+        // calling try_start_tagged for the paragraph.
+        let pdf = render_html_tagged(
+            r#"<!doctype html><html><body>
+            <p>Visit <a href="https://example.com">Example</a> today.</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_tagged_list_item_with_link_use_run_tagging() {
+        // Exercises draw_list_item_with_block's `use_run_tagging = true` path:
+        // a tagged list item whose inline-root paragraph contains a link run
+        // causes `canvas.link_run_node_id = Some(lbody_id)` to be set (the
+        // LBody synthetic node id) instead of calling try_start_tagged.
+        let pdf = render_html_tagged(
+            r#"<!doctype html><html><body>
+            <ul>
+              <li>Plain text item</li>
+              <li>Click <a href="https://example.com">here</a> for info</li>
+            </ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- dispatch_inline_box_content ---
+
+    #[test]
+    fn render_smoke_inline_block_dispatches_inline_box_content() {
+        // Exercises dispatch_inline_box_content's default dispatch_fragment path:
+        // a display:inline-block span inside a paragraph creates a
+        // LineItem::InlineBox in the shaped lines, and paragraph::draw_shaped_lines
+        // calls dispatch_inline_box_content for each such item.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p>text <span style="display:inline-block;width:50px;height:20px;
+                                 background:#cef;">box</span> more</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- Bookmarks mode ---
+
+    #[test]
+    fn render_smoke_bookmarks_mode_records_heading_anchors() {
+        // Exercises draw_v2_page's bookmark anchor recording path:
+        // `drawables.bookmark_anchors.get(&node_id)` returns Some when the node
+        // is a heading element and bookmarks(true) is set, so
+        // `bookmark_collector.record(anchor.level, anchor.label, y_pt)` fires.
+        let pdf = crate::engine::Engine::builder()
+            .bookmarks(true)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <h1>Chapter One</h1>
+                <p>Some content here.</p>
+                <h2>Section 1.1</h2>
+                <p>More content.</p>
+                </body></html>"#,
+            )
+            .expect("bookmarks render failed");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
 }
