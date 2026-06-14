@@ -4382,7 +4382,7 @@ mod erfc_approx_tests {
         for (i, w) in vals.windows(2).enumerate() {
             assert!(
                 w[0] >= w[1],
-                "erfc not decreasing at step {i}: erfc({}) = {} >= erfc({}) = {}",
+                "erfc not decreasing at step {i}: erfc({}) = {} < erfc({}) = {}",
                 i as f32 * 0.3,
                 w[0],
                 (i + 1) as f32 * 0.3,
