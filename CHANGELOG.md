@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.18.0] - 2026-06-14
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+### Bug Fixes
+* fix(multicol): clear Taffy subtree cache before column re-layout by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/460
+* fix(pagination): nested-abs page generation + end-side margin (fulgur-puml) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/471
+* fix(deps): bump pyo3 to 0.29 and smallbitvec to 2.6.1 for security advisories by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/480
+
+## New Contributors
+* @cristi-boboc made their first contribution in https://github.com/fulgur-rs/fulgur/pull/474
+
+**Full Changelog**: https://github.com/fulgur-rs/fulgur/compare/v0.17.0...v0.18.0
+
 ## [0.17.0] - 2026-06-02
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
