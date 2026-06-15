@@ -5771,4 +5771,231 @@ mod tests {
             .expect("render");
         assert!(pdf.starts_with(b"%PDF"));
     }
+
+    // --- bookmarks path in render_v2 ---
+
+    #[test]
+    fn render_smoke_bookmarks_from_headings() {
+        // Exercises the bookmark_collector path in render_v2:
+        // bookmark_collector.set_current_page(page_idx) and the BookmarkPass
+        // in engine.rs (UA CSS bookmark_mappings → effective_bookmarks).
+        let pdf = crate::engine::Engine::builder()
+            .bookmarks(true)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <h1>Chapter One</h1>
+                <p>Body content for chapter one.</p>
+                <h2>Section 1.1</h2>
+                <p>Content for section 1.1.</p>
+                <h2>Section 1.2</h2>
+                <p>Content for section 1.2.</p>
+                </body></html>"#,
+            )
+            .expect("render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- PDF/UA mode (Validator::UA1) ---
+
+    #[test]
+    fn render_smoke_pdf_ua_mode() {
+        // Exercises the Validator::UA1 configuration branch in render_v2:
+        // Configuration::new_with_validator(Validator::UA1) when config.pdf_ua = true.
+        // pdf_ua implies both enable_tagging and effective_bookmarks.
+        // PDF/UA-1 requires a document title (NoDocumentTitle validation).
+        let pdf = crate::engine::Engine::builder()
+            .pdf_ua(true)
+            .lang("en")
+            .title("PDF/UA Test Document")
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <h1>Title</h1>
+                <p>A paragraph of body text.</p>
+                </body></html>"#,
+            )
+            .expect("render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- try_start_tagged: PdfTag::Li branch + draw_list_item_marker_tagged ---
+
+    #[test]
+    fn render_smoke_tagged_unordered_list() {
+        // Exercises try_start_tagged's PdfTag::Li branch (lines ~924-931),
+        // draw_list_item_marker_tagged with lbl_id set, and the li_lbody_ids
+        // path in draw_list_item_with_block. Requires tagged mode to activate
+        // the tagging collector that populates li_lbl_ids / li_lbody_ids.
+        let pdf = crate::engine::Engine::builder()
+            .tagged(true)
+            .lang("en")
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <ul>
+                  <li>First item</li>
+                  <li>Second item</li>
+                  <li>Third item</li>
+                </ul>
+                </body></html>"#,
+            )
+            .expect("render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- use_run_tagging = true path (tagged paragraph containing a hyperlink) ---
+
+    #[test]
+    fn render_smoke_tagged_paragraph_with_hyperlink() {
+        // When tagging is enabled and a paragraph contains an <a href>, the
+        // paragraph's glyph runs include LinkSpan entries → para_has_link_runs
+        // returns true → use_run_tagging = true in dispatch_fragment.
+        // Exercises: link_run_node_id assignment, per-run TagCollector recording.
+        let pdf = crate::engine::Engine::builder()
+            .tagged(true)
+            .lang("en")
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <p>Visit <a href="https://example.com">our website</a> for more info.</p>
+                <p>Another <a href="https://other.example.com">link here</a> too.</p>
+                </body></html>"#,
+            )
+            .expect("render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- link annotation path (non-tagged, link_collector emission) ---
+
+    #[test]
+    fn render_smoke_paragraph_with_external_link() {
+        // In non-tagged mode, <a href="https://..."> produces a link annotation
+        // via link_collector. Exercises draw_shaped_lines link annotation path
+        // and dest_registry external link emission.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p>See <a href="https://example.com">example.com</a> for details.</p>
+            <p>Also see <a href="https://other.org">other.org</a>.</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- dest_registry.record: internal anchor id on a paragraph node ---
+
+    #[test]
+    fn render_smoke_internal_anchor_link() {
+        // An element with an `id` attribute is registered in dest_registry
+        // (render_v2 pre-pass, lines ~93-121). An <a href="#target"> produces
+        // an internal link annotation pointing to that destination.
+        let pdf = render_html(
+            r##"<!doctype html><html><body>
+            <p id="intro">Introduction paragraph.</p>
+            <p>Go to <a href="#intro">the intro</a>.</p>
+            </body></html>"##,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- nested overflow:hidden blocks (draw_under_clip recursive call) ---
+
+    #[test]
+    fn render_smoke_nested_overflow_clip_blocks() {
+        // A block with overflow:hidden containing another block with overflow:hidden
+        // triggers the nested-clip recursion in draw_under_clip (lines ~1866-1893):
+        // the outer clip's descendant loop dispatches inner clip blocks via a
+        // recursive draw_under_clip call so each has its own push_clip_path.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:120px;height:80px;overflow:hidden;background:#def">
+              <div style="width:90px;height:60px;overflow:hidden;background:#fed">
+                <p style="width:200px">Clipped text in nested overflow hidden blocks.</p>
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- image inside overflow:hidden (draw_under_clip img_for_block path) ---
+
+    #[test]
+    fn render_smoke_image_inside_overflow_clip() {
+        // A block sharing node_id with an image, inside an overflow:hidden container,
+        // triggers draw_under_clip's img_for_block path (lines ~1770-1772):
+        // draw_image_inner_paint is called at the content-box-offset coordinates
+        // inside the pushed clip path.
+        let mut bundle = crate::asset::AssetBundle::default();
+        bundle.add_image("red.png", RED_1X1_PNG.to_vec());
+        let pdf = crate::engine::Engine::builder()
+            .assets(bundle)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <div style="width:60px;height:40px;overflow:hidden">
+                  <img src="red.png" style="width:100px;height:100px">
+                </div>
+                </body></html>"#,
+            )
+            .expect("render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- build_metadata: producer=None branch ---
+
+    #[test]
+    fn build_metadata_producer_none_skips_producer_field() {
+        // Config::default() sets producer=Some("fulgur"). Override with None to
+        // exercise the `if let Some(ref producer)` false branch in build_metadata.
+        let config = crate::config::Config {
+            producer: None,
+            ..Default::default()
+        };
+        let meta = build_metadata(&config, None);
+        let debug = format!("{meta:?}");
+        assert!(
+            debug.contains("producer: None"),
+            "producer:None should leave the metadata producer field unset: {debug}"
+        );
+    }
+
+    // --- multi-page document with tall content (is_split paths) ---
+
+    #[test]
+    fn render_smoke_tall_content_multi_page_split() {
+        // A block taller than one page causes the fragmenter to record multiple
+        // fragments per node, setting is_split=true. Exercises draw_block_inner_paint
+        // and draw_under_opacity's is_split height-fix branches (fulgur-bq6i).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="height:1200px;background:#f0f4ff;border:2px solid #89c">
+              Tall block spanning multiple A4 pages.
+            </div>
+            <p>Second page paragraph.</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- opacity block inside overflow:hidden (draw_under_clip → draw_under_opacity) ---
+
+    #[test]
+    fn render_smoke_opacity_block_inside_overflow_clip() {
+        // A block with overflow:hidden whose clip_descendants include a node with
+        // fractional opacity (non-empty opacity_descendants) triggers the
+        // draw_under_clip → draw_under_opacity recursion (lines ~1916-1937).
+        let pdf = render_html(
+            r##"<!doctype html><html><body>
+            <div style="width:150px;height:100px;overflow:hidden;background:#eef">
+              <div style="opacity:0.5">
+                <svg xmlns="http://www.w3.org/2000/svg" width="80" height="60">
+                  <rect x="5" y="5" width="70" height="50" fill="#37f"/>
+                </svg>
+              </div>
+            </div>
+            </body></html>"##,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
 }
