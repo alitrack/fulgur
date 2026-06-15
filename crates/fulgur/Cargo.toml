@@ -20,13 +20,13 @@ krilla-svg = "0.7.0"
 # straight to krilla-svg (see `extract_inline_svg_tree`, which re-parses
 # the inline `<svg>` markup so the tree is built with *this* usvg).
 usvg = "0.45"
-blitz-html = "0.3.0-alpha.4"
-blitz-dom = { version = "0.3.0-alpha.4", features = ["floats"] }
-blitz-traits = "0.3.0-alpha.4"
+blitz-html = "0.3.0-alpha.5"
+blitz-dom = { version = "0.3.0-alpha.5", features = ["floats"] }
+blitz-traits = "0.3.0-alpha.5"
 taffy = "=0.11.0-experimental-cache-fix.3"
-parley = "0.9"
+parley = "0.10"
 skrifa = "0.42"
-stylo = "0.17.0"
+stylo = "0.18.0"
 woff2-patched = "0.4"
 thiserror = "2"
 minijinja = { version = "=2.19.0", features = ["unstable_machinery"] }
