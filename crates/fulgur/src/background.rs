@@ -4282,4 +4282,226 @@ mod blur_stops_tests {
         // at t=1, alpha must be near 0
         assert!(t1 < 0.005);
     }
+
+    #[test]
+    fn blur_stops_mask_zero_shadow_alpha_produces_all_black() {
+        // shadow_alpha_byte=0 → shadow_a=0 → luma=0 for every stop
+        let stops = blur_stops_mask(0, 4);
+        assert_eq!(stops.len(), 4);
+        for s in &stops {
+            assert_eq!(
+                s.color,
+                krilla::color::rgb::Color::new(0, 0, 0).into(),
+                "luma should be 0 for transparent shadow"
+            );
+            assert_eq!(s.opacity, krilla::num::NormalizedF32::ONE);
+        }
+    }
+
+    #[test]
+    fn blur_stops_mask_minimum_two_stops() {
+        // n=2 is the minimum; first offset=0, last offset=1
+        let stops = blur_stops_mask(200, 2);
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].offset, krilla::num::NormalizedF32::ZERO);
+        assert_eq!(stops[1].offset, krilla::num::NormalizedF32::ONE);
+        assert_eq!(stops[0].opacity, krilla::num::NormalizedF32::ONE);
+        assert_eq!(stops[1].opacity, krilla::num::NormalizedF32::ONE);
+    }
+}
+
+#[cfg(test)]
+mod lerp_u8_tests {
+    use super::lerp_u8;
+
+    #[test]
+    fn alpha_zero_returns_a() {
+        assert_eq!(lerp_u8(100, 200, 0.0), 100);
+        assert_eq!(lerp_u8(0, 255, 0.0), 0);
+    }
+
+    #[test]
+    fn alpha_one_returns_b() {
+        assert_eq!(lerp_u8(100, 200, 1.0), 200);
+        assert_eq!(lerp_u8(0, 255, 1.0), 255);
+    }
+
+    #[test]
+    fn midpoint_rounds_to_nearest() {
+        // 0 + (255 - 0) * 0.5 = 127.5 → rounds to 128
+        assert_eq!(lerp_u8(0, 255, 0.5), 128);
+        // 100 + (200 - 100) * 0.5 = 150 exactly
+        assert_eq!(lerp_u8(100, 200, 0.5), 150);
+    }
+
+    #[test]
+    fn reverse_direction() {
+        // 255 + (0 - 255) * 0.25 = 191.25 → rounds to 191
+        assert_eq!(lerp_u8(255, 0, 0.25), 191);
+    }
+
+    #[test]
+    fn same_endpoints_always_returns_same() {
+        assert_eq!(lerp_u8(128, 128, 0.0), 128);
+        assert_eq!(lerp_u8(128, 128, 0.5), 128);
+        assert_eq!(lerp_u8(128, 128, 1.0), 128);
+    }
+}
+
+#[cfg(test)]
+mod erfc_approx_tests {
+    use super::erfc_approx;
+
+    #[test]
+    fn erfc_zero_is_one() {
+        // erfc(0) = 1.0 by definition
+        let v = erfc_approx(0.0);
+        assert!((v - 1.0).abs() < 1e-5, "erfc(0) = {v}, expected 1.0");
+    }
+
+    #[test]
+    fn erfc_large_is_near_zero() {
+        // erfc(4) ≈ 1.54e-8 — negligibly small
+        let v = erfc_approx(4.0);
+        assert!(v < 1e-3, "erfc(4) should be near 0, got {v}");
+    }
+
+    #[test]
+    fn erfc_one_matches_reference() {
+        // erfc(1) ≈ 0.15730 (Abramowitz & Stegun, max error 1.5e-7)
+        let v = erfc_approx(1.0);
+        assert!(
+            (v - 0.157_30).abs() < 1e-4,
+            "erfc(1) = {v}, expected ~0.15730"
+        );
+    }
+
+    #[test]
+    fn erfc_monotonically_decreasing() {
+        let vals: Vec<f32> = (0..=10).map(|i| erfc_approx(i as f32 * 0.3)).collect();
+        for (i, w) in vals.windows(2).enumerate() {
+            assert!(
+                w[0] >= w[1],
+                "erfc not decreasing at step {i}: erfc({}) = {} < erfc({}) = {}",
+                i as f32 * 0.3,
+                w[0],
+                (i + 1) as f32 * 0.3,
+                w[1]
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod additional_conic_and_grid_tests {
+    use super::*;
+    use crate::draw_primitives::{GradientStop, GradientStopPosition};
+
+    // ─── normalize_conic_stops edge cases ────────────────────────────────────
+
+    #[test]
+    fn normalize_conic_empty_input_returns_empty() {
+        // is_empty() early-return branch
+        let n = normalize_conic_stops(&[]);
+        assert!(n.is_empty());
+    }
+
+    #[test]
+    fn normalize_conic_length_px_treated_as_auto() {
+        // LengthPx is not valid in conic gradient positions; treated as Auto (→ None → interpolated)
+        let stops = vec![
+            GradientStop {
+                position: GradientStopPosition::Fraction(0.0),
+                rgba: [255, 0, 0, 255],
+                is_hint: false,
+            },
+            GradientStop {
+                position: GradientStopPosition::LengthPx(100.0),
+                rgba: [0, 255, 0, 255],
+                is_hint: false,
+            },
+            GradientStop {
+                position: GradientStopPosition::Fraction(1.0),
+                rgba: [0, 0, 255, 255],
+                is_hint: false,
+            },
+        ];
+        let n = normalize_conic_stops(&stops);
+        assert_eq!(n.len(), 3);
+        // LengthPx treated as Auto → mid-point auto-fill between 0.0 and 1.0
+        assert!((n[1].0 - 0.5).abs() < 1e-6, "LengthPx middle stop → 0.5");
+    }
+
+    #[test]
+    fn normalize_conic_two_auto_stops_fill_endpoints() {
+        let stops = vec![
+            GradientStop {
+                position: GradientStopPosition::Auto,
+                rgba: [255, 0, 0, 255],
+                is_hint: false,
+            },
+            GradientStop {
+                position: GradientStopPosition::Auto,
+                rgba: [0, 0, 255, 255],
+                is_hint: false,
+            },
+        ];
+        let n = normalize_conic_stops(&stops);
+        assert_eq!(n.len(), 2);
+        assert!((n[0].0 - 0.0).abs() < 1e-6);
+        assert!((n[1].0 - 1.0).abs() < 1e-6);
+    }
+
+    // ─── sample_conic_color edge cases ───────────────────────────────────────
+
+    #[test]
+    fn sample_conic_empty_stops_returns_opaque_black() {
+        // is_empty() early-return branch
+        assert_eq!(sample_conic_color(&[], 0.5), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn sample_conic_before_first_stop_returns_first_color() {
+        let stops = vec![(0.3, [255, 0, 0, 255]), (0.8, [0, 0, 255, 255])];
+        assert_eq!(sample_conic_color(&stops, 0.1), [255, 0, 0, 255]);
+    }
+
+    // ─── try_uniform_grid single-column ──────────────────────────────────────
+
+    #[test]
+    fn uniform_grid_single_column_detected() {
+        // 1 column × 3 rows: xs.len() == 1 → step_x falls back to cell_w
+        let tiles = vec![
+            (10.0_f32, 0.0_f32, 15.0_f32, 20.0_f32),
+            (10.0, 20.0, 15.0, 20.0),
+            (10.0, 40.0, 15.0, 20.0),
+        ];
+        let g = try_uniform_grid(&tiles).expect("1×3 grid detected");
+        assert_eq!(g.count, (1, 3));
+        // xs.len() < 2 → step_x = cell_w = 15
+        assert!(
+            (g.step.0 - 15.0).abs() < 1e-3,
+            "step_x should equal cell_w, got {}",
+            g.step.0
+        );
+        assert!((g.step.1 - 20.0).abs() < 1e-3);
+        assert!((g.origin.0 - 10.0).abs() < 1e-3);
+        assert!((g.origin.1 - 0.0).abs() < 1e-3);
+    }
+
+    // ─── resolve_repeat_axis Round count clamped to 1 ────────────────────────
+
+    #[test]
+    fn resolve_repeat_axis_round_clip_much_smaller_than_image_clamps_count_to_one() {
+        // clip_size=40, image_size=110: round(40/110) = round(0.36) = 0 → max(1) = 1
+        // adjusted = 40 / 1 = 40
+        let (size, space, start, end) = resolve_repeat_axis(BgRepeat::Round, 0.0, 110.0, 0.0, 40.0);
+        assert!(
+            (size - 40.0).abs() < 1e-5,
+            "adjusted tile size = clip_size/1 = 40, got {size}"
+        );
+        assert_eq!(space, 0.0);
+        assert_eq!(start, 0.0);
+        assert!((end - 40.0).abs() < 1e-5);
+    }
 }
