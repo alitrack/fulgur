@@ -5998,4 +5998,360 @@ mod tests {
         );
         assert!(pdf.starts_with(b"%PDF"));
     }
+
+    // --- paragraph_lines_for_page: Text / InlineBox items in the split path ---
+
+    #[test]
+    fn paragraph_lines_for_page_split_text_item_baseline_rebased_not_x_offset() {
+        // A split paragraph whose lines contain a Text run. The rebase loop
+        // adjusts `baseline` by `consumed` but leaves `run.x_offset` alone —
+        // only `Image.computed_y` gets mutated inside the item loop.
+        let run = crate::paragraph::ShapedGlyphRun {
+            font_data: Arc::new(vec![]),
+            font_index: 0,
+            font_size: 12.0,
+            color: [0, 0, 0, 255],
+            decoration: crate::paragraph::TextDecoration::default(),
+            glyphs: vec![],
+            text: "hello".to_string(),
+            x_offset: 7.0,
+            link: None,
+        };
+        let line0 = crate::paragraph::ShapedLine {
+            height: 12.0,
+            baseline: 9.0,
+            items: vec![crate::paragraph::LineItem::Text(run.clone())],
+        };
+        let line1 = crate::paragraph::ShapedLine {
+            height: 12.0,
+            baseline: 21.0,
+            items: vec![crate::paragraph::LineItem::Text(run)],
+        };
+        // px_to_pt(16px) = 12pt per line, so page 0 gets line0, page 1 gets line1.
+        let fragments = vec![
+            make_fragment(0, 16.0), // 12pt
+            make_fragment(1, 16.0),
+        ];
+        let result = paragraph_lines_for_page(&[line0, line1], &fragments, 1, true);
+        assert!(result.is_some(), "page 1 should yield Some");
+        let sliced = result.unwrap();
+        assert_eq!(sliced.len(), 1);
+        // baseline rebased: 21pt − 12pt consumed = 9pt
+        assert!(
+            (sliced[0].baseline - 9.0).abs() < 0.01,
+            "baseline={}",
+            sliced[0].baseline
+        );
+        // x_offset on the Text run must NOT be touched
+        match &sliced[0].items[0] {
+            crate::paragraph::LineItem::Text(r) => {
+                assert!(
+                    (r.x_offset - 7.0).abs() < 0.001,
+                    "x_offset should be unchanged, got {}",
+                    r.x_offset
+                );
+            }
+            _ => panic!("expected Text item"),
+        }
+    }
+
+    #[test]
+    fn paragraph_lines_for_page_split_inline_box_item_x_offset_unchanged() {
+        // An InlineBox inside a split paragraph: the item loop skips InlineBox
+        // (only Image.computed_y is rebased). x_offset must not be touched.
+        let ib = crate::paragraph::InlineBoxItem {
+            node_id: None,
+            width: 20.0,
+            height: 10.0,
+            x_offset: 5.0,
+            computed_y: 3.0,
+            link: None,
+            opacity: 1.0,
+            visible: true,
+        };
+        let line0 = crate::paragraph::ShapedLine {
+            height: 12.0,
+            baseline: 9.0,
+            items: vec![],
+        };
+        let line1 = crate::paragraph::ShapedLine {
+            height: 12.0,
+            baseline: 21.0,
+            items: vec![crate::paragraph::LineItem::InlineBox(ib)],
+        };
+        let fragments = vec![make_fragment(0, 16.0), make_fragment(1, 16.0)];
+        let result = paragraph_lines_for_page(&[line0, line1], &fragments, 1, true);
+        let sliced = result.unwrap();
+        match &sliced[0].items[0] {
+            crate::paragraph::LineItem::InlineBox(b) => {
+                assert!(
+                    (b.x_offset - 5.0).abs() < 0.001,
+                    "x_offset should be unchanged, got {}",
+                    b.x_offset
+                );
+                assert!(
+                    (b.computed_y - 3.0).abs() < 0.001,
+                    "InlineBox.computed_y should not be rebased, got {}",
+                    b.computed_y
+                );
+            }
+            _ => panic!("expected InlineBox item"),
+        }
+    }
+
+    #[test]
+    fn paragraph_lines_for_page_split_three_pages_middle_page_is_correct() {
+        // 3-page split: 3 lines (12pt each), 3 fragments (16px each → 12pt).
+        // Page 0: line0; Page 1: line1; Page 2: line2.
+        // Consumed for page 2 = 2 × 12pt = 24pt.
+        // line2.baseline (paragraph-absolute) = 33pt → rebased = 33 − 24 = 9pt.
+        let lines: Vec<crate::paragraph::ShapedLine> = (0..3)
+            .map(|i| crate::paragraph::ShapedLine {
+                height: 12.0,
+                baseline: 9.0 + 12.0 * i as f32,
+                items: vec![],
+            })
+            .collect();
+        let fragments: Vec<crate::pagination_layout::Fragment> =
+            (0..3).map(|i| make_fragment(i, 16.0)).collect();
+        // Middle page
+        let mid = paragraph_lines_for_page(&lines, &fragments, 1, true).unwrap();
+        assert_eq!(mid.len(), 1, "one line per page");
+        assert!(
+            (mid[0].baseline - 9.0).abs() < 0.01,
+            "page1 baseline={}",
+            mid[0].baseline
+        );
+        // Last page
+        let last = paragraph_lines_for_page(&lines, &fragments, 2, true).unwrap();
+        assert_eq!(last.len(), 1);
+        assert!(
+            (last[0].baseline - 9.0).abs() < 0.01,
+            "page2 baseline rebased: {}",
+            last[0].baseline
+        );
+    }
+
+    // --- paint_multicol_rule_for_page: exercised via Engine::render_html ---
+
+    #[test]
+    fn render_smoke_column_rule_solid() {
+        // A two-column layout with a solid column rule exercises
+        // paint_multicol_rule_for_page → build_multicol_stroke (Solid arm) →
+        // stroke_line. Without this test the post-pass multicol-rule loop
+        // in draw_v2_page is never reached.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:2;column-gap:16px;
+                        column-rule:2px solid #333;width:300px">
+              <p>Alpha beta gamma delta epsilon zeta eta theta iota kappa.</p>
+              <p>Lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_column_rule_dashed() {
+        // Dashed column rule exercises build_multicol_stroke's Dashed arm.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:2;column-gap:20px;
+                        column-rule:3px dashed #888;width:400px">
+              <p>One two three four five six seven eight nine ten eleven.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_column_rule_dotted() {
+        // Dotted column rule exercises build_multicol_stroke's Dotted arm
+        // (LineCap::Round, dash array [0, 2w]).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:3;column-gap:12px;
+                        column-rule:2px dotted #c00;width:400px">
+              <p>Text spanning three columns with a dotted rule between each.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_block_inner_paint: box-shadow path via draw_box_shadows ---
+
+    #[test]
+    fn render_smoke_box_shadow_on_block() {
+        // A block with a non-zero box-shadow exercises draw_box_shadows in
+        // background.rs and the shadow 9-slice paint path in draw_block_inner_paint.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:120px;height:60px;background:#cef;
+                        box-shadow:4px 6px 12px rgba(0,0,0,0.4)">
+              shadow block
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_box_shadow_with_spread() {
+        // Box-shadow with non-zero spread exercises the spread-radius code in
+        // background.rs::draw_box_shadows.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:100px;height:50px;background:#fce;
+                        box-shadow:2px 2px 8px 4px rgba(80,0,120,0.5)">
+              spread shadow
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_list_item_marker: list-style-type: none ---
+
+    #[test]
+    fn render_smoke_list_style_none() {
+        // list-style-type: none means no marker is emitted. The marker dispatch in
+        // draw_list_item_marker must handle a ListItemMarker variant that produces
+        // no ink without panicking.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <ul style="list-style-type:none">
+              <li>First item</li>
+              <li>Second item</li>
+            </ul>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- tagged PDF with semantic HTML elements ---
+
+    #[test]
+    fn render_smoke_tagged_semantic_article_section_aside() {
+        // <article>, <section>, <aside>, <nav>, <figure>, <figcaption> produce
+        // semantic PDF tags in tagged mode. This exercises try_start_tagged's
+        // Div / Figure / Art / Sect variants and the nested-tagging path in
+        // build_struct_tree.
+        let pdf = crate::engine::Engine::builder()
+            .tagged(true)
+            .lang("en")
+            .build()
+            .render_html(
+                r##"<!doctype html><html><body>
+                <article>
+                  <section>
+                    <h1>Article Heading</h1>
+                    <p>Body text inside a section.</p>
+                  </section>
+                  <aside>
+                    <p>Related aside content.</p>
+                  </aside>
+                  <nav>
+                    <a href="#top">Back to top</a>
+                  </nav>
+                </article>
+                </body></html>"##,
+            )
+            .expect("tagged render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_tagged_figure_with_alt_text() {
+        // An <img> with an alt attribute inside <figure> exercises:
+        // - the alt_text extraction path in tagging (SemanticEntry.alt_text)
+        // - try_start_tagged's Figure / Caption tag variants
+        // The alt_text is included in the PDF structure tree.
+        let mut bundle = crate::asset::AssetBundle::default();
+        bundle.add_image("img.png", RED_1X1_PNG.to_vec());
+        let pdf = crate::engine::Engine::builder()
+            .tagged(true)
+            .lang("en")
+            .assets(bundle)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <figure>
+                  <img src="img.png" alt="A red dot" style="width:40px;height:40px">
+                  <figcaption>Figure 1: Example image</figcaption>
+                </figure>
+                </body></html>"#,
+            )
+            .expect("tagged render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- multi-column with column-span: all ---
+
+    #[test]
+    fn render_smoke_multicol_with_column_span_all() {
+        // A column-span:all element inside a multicol container exercises the
+        // column-spanning code path in multicol_layout and the column-span
+        // dispatch in draw_v2_page.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:2;width:400px;column-gap:16px">
+              <p>Text before the spanning heading.</p>
+              <h2 style="column-span:all">Spanning Heading</h2>
+              <p>Text after the spanning heading in the next group of columns.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- dispatch_fragment: standalone image with no block wrapper ---
+
+    #[test]
+    fn render_smoke_standalone_image_in_table_cell() {
+        // An <img> as the sole content of a table cell is registered as an
+        // ImageEntry with no co-located BlockEntry. This exercises the
+        // dispatch_fragment image-only path (drawables.images.get returns Some,
+        // drawables.block_styles.get returns None).
+        let mut bundle = crate::asset::AssetBundle::default();
+        bundle.add_image("dot.png", RED_1X1_PNG.to_vec());
+        let pdf = crate::engine::Engine::builder()
+            .assets(bundle)
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <table><tr>
+                  <td><img src="dot.png" style="width:32px;height:32px"></td>
+                  <td>Text cell</td>
+                </tr></table>
+                </body></html>"#,
+            )
+            .expect("render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- multi-page column rule (straddling boundary) ---
+
+    #[test]
+    fn render_smoke_column_rule_multipage() {
+        // A multicol container with enough content to straddle a page boundary
+        // exercises the consumed / cutoff logic in paint_multicol_rule_for_page
+        // for the continuation page (page_index > 0).
+        let pdf = render_html(
+            r#"<!doctype html><html><head><style>
+            body { margin: 0; }
+            .mc { column-count:2; column-gap:16px; column-rule:2px solid #555;
+                  width:100%; }
+            .tall { height:600px; background:#f0f4ff; }
+            </style></head><body>
+            <div class="mc">
+              <div class="tall">Column content page 1.</div>
+              <div class="tall">More content spanning to page 2.</div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
 }
