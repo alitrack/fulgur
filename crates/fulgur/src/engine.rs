@@ -224,16 +224,19 @@ impl Engine {
         // Build and apply DOM passes
         let mut passes: Vec<Box<dyn crate::blitz_adapter::DomPass>> = Vec::new();
 
-        // Restructure `<table><caption>` before layout so Blitz lays the
-        // caption out as a normal block (it otherwise drops it during table
-        // box construction). See blitz_adapter::CaptionRestructurePass.
-        passes.push(Box::new(crate::blitz_adapter::CaptionRestructurePass));
-
         if !css_to_inject.is_empty() {
             passes.push(Box::new(crate::blitz_adapter::InjectCssPass {
                 css: css_to_inject,
             }));
         }
+
+        // Restructure `<table><caption>` before layout so Blitz lays the
+        // caption out as a normal block (it otherwise drops it during table
+        // box construction). This runs *after* InjectCssPass so the pass's
+        // pre-resolve (which reads computed `caption-side`) sees engine- and
+        // AssetBundle-injected CSS, not just document `<style>`/`<link>`.
+        // See blitz_adapter::CaptionRestructurePass.
+        passes.push(Box::new(crate::blitz_adapter::CaptionRestructurePass));
 
         let ctx = crate::blitz_adapter::PassContext { font_data: fonts };
         crate::blitz_adapter::apply_passes(&mut doc, &passes, &ctx);

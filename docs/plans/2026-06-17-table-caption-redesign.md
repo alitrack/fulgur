@@ -200,3 +200,22 @@ CLAUDE.md の coverage 規約に従い VRT と lib 側の両方を置く:
   engine.rs:234, :348（パス→resolve 順序）
 - mutator API: `blitz-dom-0.2.4/src/mutator.rs`
 - v2 アーキテクチャ: CLAUDE.md（`Drawables` / `PaginationGeometryTable` / geometry 駆動）
+
+## 7. 実装メモ（2026-06-17 実装完了）
+
+- `CaptionRestructurePass`（`DomPass`）を `blitz_adapter.rs` に実装。`engine.rs` で
+  **`InjectCssPass` の後**に push（pass の pre-resolve が engine / `AssetBundle` 注入 CSS の
+  `caption-side` も読めるようにするため。document `<style>`/`<link>` だけだと取りこぼす）。
+- `caption-side` は caption 存在時のみの先行 `resolve()` で computed style から読み、
+  wrapper の子順序（top→`[caption, table]` / bottom→`[table, caption]`）に反映。
+- `width:fit-content` wrapper の懸念（全幅テーブルの縮小）は実測で**非回帰**を確認:
+  `width:100%` テーブルは caption 有無で右列 x が不変（全幅維持）、`margin:0 auto` テーブルも
+  cell 位置が caption 有無で不変（センタリング維持）。Taffy が wrapper↔テーブル幅の循環を
+  正しく解いている。
+- テスト（`crates/fulgur/tests/render_smoke.rs`）:
+  `table_caption_text_renders_in_pdf` / `table_caption_side_top_renders_above_table` /
+  `table_caption_side_bottom_renders_below_table` / `table_caption_side_bottom_via_injected_css` /
+  `table_caption_with_nested_inline_renders` / `table_with_two_captions_does_not_panic` /
+  `table_caption_preserves_full_width_table`。
+- 描画は既存の block/paragraph 経路を通り新 draw arm は無いため、codecov は render_smoke で充足。
+  VRT golden は未追加（視覚回帰の保険として将来追加可）。

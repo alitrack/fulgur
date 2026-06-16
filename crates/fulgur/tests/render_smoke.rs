@@ -4456,3 +4456,103 @@ fn table_with_two_captions_does_not_panic() {
     assert!(!pdf.is_empty());
     assert!(pdf.starts_with(b"%PDF"));
 }
+
+/// fulgur-78o: `caption-side` must be honored even when supplied through
+/// engine-injected CSS (`AssetBundle::add_css`) rather than a document
+/// `<style>`. The caption restructure pass's pre-resolve must run after
+/// engine CSS is injected into the stylist, otherwise `caption-side`
+/// silently defaults to top.
+#[test]
+fn table_caption_side_bottom_via_injected_css() {
+    use fulgur::inspect::inspect;
+
+    let font_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/.fonts/NotoSans-Regular.ttf");
+    let mut assets = AssetBundle::default();
+    assets.add_font_file(&font_path).expect("load font");
+    assets.add_css("body { font-family: 'Noto Sans', sans-serif; }");
+    assets.add_css(
+        "caption { caption-side: bottom; font-size: 28px; } td { font-size: 12px; padding: 4px; }",
+    );
+    let engine = Engine::builder().assets(assets).build();
+
+    let html = r#"<!doctype html><html><body>
+        <table>
+          <caption>CAP</caption>
+          <tbody>
+            <tr><td>rowone</td></tr>
+            <tr><td>rowtwo</td></tr>
+          </tbody>
+        </table>
+    </body></html>"#;
+    let pdf = engine.render_html(html).expect("render must succeed");
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("caption-injected.pdf");
+    std::fs::write(&path, &pdf).expect("write pdf");
+    let inspected = inspect(&path).expect("inspect pdf");
+
+    let caption_y = inspected
+        .text_items
+        .iter()
+        .find(|t| t.font_size > 15.0)
+        .map(|t| t.y)
+        .expect("caption text item must render");
+    let min_cell = inspected
+        .text_items
+        .iter()
+        .filter(|t| t.font_size <= 15.0)
+        .map(|t| t.y)
+        .fold(f32::INFINITY, f32::min);
+    assert!(
+        caption_y < min_cell,
+        "caption-side:bottom via injected CSS — caption (y={caption_y}) must sit below all cells (min cell y={min_cell})"
+    );
+}
+
+/// Helper: max cell-text x position for a `width:100%` two-column table,
+/// optionally with a caption. Used to prove the caption restructure
+/// wrapper does not shrink the table away from full width (the primary
+/// SaaS report-table use case). fulgur-78o.
+fn full_width_table_max_cell_x(with_caption: bool) -> f32 {
+    use fulgur::inspect::inspect;
+    let caption = if with_caption {
+        "<caption>CAP</caption>"
+    } else {
+        ""
+    };
+    let html = format!(
+        r#"<!doctype html><html><head><style>
+          td {{ font-size: 12px; padding: 4px; }}
+        </style></head><body>
+          <table style="width:100%">{caption}
+            <tbody><tr><td>leftcell</td><td>rightcell</td></tr></tbody>
+          </table>
+        </body></html>"#
+    );
+    let pdf = noto_engine()
+        .render_html(&html)
+        .expect("render must succeed");
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("fullwidth.pdf");
+    std::fs::write(&path, &pdf).expect("write pdf");
+    let inspected = inspect(&path).expect("inspect pdf");
+    inspected
+        .text_items
+        .iter()
+        .filter(|t| t.font_size <= 15.0)
+        .map(|t| t.x)
+        .fold(f32::NEG_INFINITY, f32::max)
+}
+
+/// fulgur-78o: a `width:100%` table keeps its full width when it has a
+/// caption — the `fit-content` wrapper must not shrink-wrap it. We assert
+/// the second column's x is essentially unchanged by adding a caption.
+#[test]
+fn table_caption_preserves_full_width_table() {
+    let without = full_width_table_max_cell_x(false);
+    let with = full_width_table_max_cell_x(true);
+    assert!(
+        (without - with).abs() < 1.0,
+        "caption must not change table width: max cell x without={without}, with={with}"
+    );
+}
