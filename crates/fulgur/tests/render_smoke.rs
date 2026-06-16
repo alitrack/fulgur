@@ -4311,3 +4311,148 @@ fn multicol_table_with_text_content_renders() {
     let pdf = engine.render_html(html).expect("render must not fail");
     assert!(!pdf.is_empty());
 }
+
+/// fulgur-78o: a `<table>` with a `<caption>` must render the caption's
+/// text in the output PDF. Blitz drops `<caption>` during table box
+/// construction (layout/table.rs "Probably a table caption: ignore"),
+/// so without fulgur's caption restructure pass the text is silently
+/// missing. See docs/plans/2026-06-17-table-caption-redesign.md.
+#[test]
+fn table_caption_text_renders_in_pdf() {
+    let html = r#"<!doctype html><html><body>
+        <table>
+          <caption>CAPTIONWORD</caption>
+          <tbody><tr><td>cellone</td><td>celltwo</td></tr></tbody>
+        </table>
+    </body></html>"#;
+    let pdf = noto_engine()
+        .render_html(html)
+        .expect("render must succeed");
+    assert!(!pdf.is_empty());
+
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
+    assert!(
+        text.contains("CAPTIONWORD"),
+        "caption text must render in the PDF; got: {text:?}"
+    );
+}
+
+/// fulgur-78o caption-side fixture. The caption uses a distinctly larger
+/// font so its text item can be told apart from the cell text items in
+/// `inspect` output (which reports glyph IDs, not Unicode, so we cannot
+/// match on text). `inspect` y-coordinates are PDF user space (y-up:
+/// larger y is higher on the page). Returns `(caption_y, min_cell_y,
+/// max_cell_y)`.
+fn caption_and_cell_ys(caption_side: &str) -> (f32, f32, f32) {
+    use fulgur::inspect::inspect;
+
+    let html = format!(
+        r#"<!doctype html><html><head><style>
+          caption {{ caption-side: {caption_side}; font-size: 28px; }}
+          td {{ font-size: 12px; padding: 4px; }}
+        </style></head><body>
+          <table>
+            <caption>CAP</caption>
+            <tbody>
+              <tr><td>rowone</td></tr>
+              <tr><td>rowtwo</td></tr>
+              <tr><td>rowthree</td></tr>
+            </tbody>
+          </table>
+        </body></html>"#
+    );
+    let pdf = noto_engine()
+        .render_html(&html)
+        .expect("render must succeed");
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("caption-side.pdf");
+    std::fs::write(&path, &pdf).expect("write pdf");
+    let inspected = inspect(&path).expect("inspect pdf");
+
+    // The caption renders at 28px → 21pt; cells at 12px → 9pt. Split on a
+    // threshold between the two.
+    let caption_y = inspected
+        .text_items
+        .iter()
+        .find(|t| t.font_size > 15.0)
+        .map(|t| t.y)
+        .expect("caption text item must render");
+    let cell_ys: Vec<f32> = inspected
+        .text_items
+        .iter()
+        .filter(|t| t.font_size <= 15.0)
+        .map(|t| t.y)
+        .collect();
+    assert!(!cell_ys.is_empty(), "cell text items must render");
+    let min_cell = cell_ys.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_cell = cell_ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    (caption_y, min_cell, max_cell)
+}
+
+/// fulgur-78o: `caption-side: top` (default) places the caption above the
+/// table body — its y must be higher than every cell (y-up coordinates).
+#[test]
+fn table_caption_side_top_renders_above_table() {
+    let (caption_y, _min_cell, max_cell) = caption_and_cell_ys("top");
+    assert!(
+        caption_y > max_cell,
+        "caption-side:top — caption (y={caption_y}) must sit above all cells (max cell y={max_cell})"
+    );
+}
+
+/// fulgur-78o: `caption-side: bottom` places the caption below the table
+/// body — its y must be lower than every cell (y-up coordinates).
+#[test]
+fn table_caption_side_bottom_renders_below_table() {
+    let (caption_y, min_cell, _max_cell) = caption_and_cell_ys("bottom");
+    assert!(
+        caption_y < min_cell,
+        "caption-side:bottom — caption (y={caption_y}) must sit below all cells (min cell y={min_cell})"
+    );
+}
+
+/// fulgur-78o: a caption with nested inline markup renders its text. The
+/// restructured caption is an ordinary block flow root, so inline shaping
+/// applies to its descendants just like any block.
+#[test]
+fn table_caption_with_nested_inline_renders() {
+    let html = r#"<!doctype html><html><body>
+        <table>
+          <caption>pre <strong>BOLDCAPWORD</strong> post</caption>
+          <tbody><tr><td>cellone</td></tr></tbody>
+        </table>
+    </body></html>"#;
+    let pdf = noto_engine()
+        .render_html(html)
+        .expect("render must succeed");
+    let Some(text) = extract_pdf_text(&pdf) else {
+        eprintln!("pdftotext not available; skipping text assertion");
+        return;
+    };
+    assert!(
+        text.contains("BOLDCAPWORD"),
+        "nested caption text must render; got: {text:?}"
+    );
+}
+
+/// fulgur-78o: a table with more than one `<caption>` must not panic.
+/// Only the first caption is restructured (per scope); the render must
+/// still succeed.
+#[test]
+fn table_with_two_captions_does_not_panic() {
+    let html = r#"<!doctype html><html><body>
+        <table>
+          <caption>FIRSTCAP</caption>
+          <caption>SECONDCAP</caption>
+          <tbody><tr><td>cellone</td></tr></tbody>
+        </table>
+    </body></html>"#;
+    let pdf = noto_engine()
+        .render_html(html)
+        .expect("render must succeed");
+    assert!(!pdf.is_empty());
+    assert!(pdf.starts_with(b"%PDF"));
+}

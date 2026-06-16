@@ -1376,6 +1376,107 @@ fn inject_style_node(
     style_id
 }
 
+/// Collect `(table_id, caption_id)` pairs for every `<table>` that has a
+/// direct `<caption>` child. Only the first caption per table is returned
+/// (per CSS the table generates at most one caption box; additional
+/// captions are rare and out of scope).
+fn collect_caption_tables(doc: &HtmlDocument) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let root = doc.root_element().id;
+    collect_caption_tables_recursive(doc, root, 0, &mut out);
+    out
+}
+
+fn collect_caption_tables_recursive(
+    doc: &HtmlDocument,
+    node_id: usize,
+    depth: usize,
+    out: &mut Vec<(usize, usize)>,
+) {
+    if depth >= MAX_DOM_DEPTH {
+        return;
+    }
+    let Some(node) = doc.get_node(node_id) else {
+        return;
+    };
+    let is_table = node
+        .element_data()
+        .is_some_and(|el| el.name.local.as_ref() == "table");
+    if is_table {
+        if let Some(&caption_id) = node.children.iter().find(|&&child_id| {
+            doc.get_node(child_id)
+                .and_then(|c| c.element_data())
+                .is_some_and(|el| el.name.local.as_ref() == "caption")
+        }) {
+            out.push((node_id, caption_id));
+        }
+    }
+    let children = node.children.clone();
+    for child_id in children {
+        collect_caption_tables_recursive(doc, child_id, depth + 1, out);
+    }
+}
+
+/// Restructures `<table><caption>` so Blitz can lay the caption out.
+///
+/// blitz-dom drops any non-table-typed child of a `<table>` during box
+/// construction (`layout/table.rs` "Probably a table caption: ignore"),
+/// leaving the caption with a 0×0 box and no shaped text — so it never
+/// renders. This pass, which runs before `resolve()`, moves the caption
+/// out of the table and wraps `caption` + `table` in a `width:fit-content`
+/// block container. The caption then becomes an ordinary block flow box
+/// that Blitz constructs and lays out normally, and the standard
+/// convert / paginate / render path picks it up with no further changes.
+/// See `docs/plans/2026-06-17-table-caption-redesign.md`.
+pub struct CaptionRestructurePass;
+
+impl DomPass for CaptionRestructurePass {
+    fn apply(&self, doc: &mut HtmlDocument, _ctx: &PassContext<'_>) {
+        let pairs = collect_caption_tables(doc);
+        if pairs.is_empty() {
+            return;
+        }
+        // `caption-side` is a computed (cascaded) style, so resolve once to
+        // read it. This pass runs before the engine's own `resolve()`, which
+        // re-resolves the restructured tree afterwards; the extra resolve is
+        // paid only when the document actually contains a captioned table.
+        resolve(doc);
+        for (table_id, caption_id) in pairs {
+            let on_bottom = caption_side_is_bottom(doc, caption_id);
+            let mut mutator = doc.mutate();
+            let wrapper_id = mutator.create_element(make_qual_name("div"), vec![]);
+            // `fit-content` keeps the wrapper at the table's width when the
+            // caption is narrower; a wider caption clamps to the available
+            // (page) width and wraps.
+            mutator.set_style_property(wrapper_id, "display", "block");
+            mutator.set_style_property(wrapper_id, "width", "fit-content");
+            // Override the UA `display: table-caption` so the moved caption
+            // is a plain block (otherwise Stylo wraps it in an anonymous
+            // table box again).
+            mutator.set_style_property(caption_id, "display", "block");
+            // Put the wrapper where the table was, then move caption + table
+            // into it. `caption-side: top` (default) → caption first;
+            // `bottom` → table first.
+            mutator.replace_node_with(table_id, &[wrapper_id]);
+            if on_bottom {
+                mutator.append_children(wrapper_id, &[table_id, caption_id]);
+            } else {
+                mutator.append_children(wrapper_id, &[caption_id, table_id]);
+            }
+        }
+    }
+}
+
+/// Read the resolved `caption-side` of a caption node. Returns `true` for
+/// `bottom`, `false` for `top` (the default, also used when styles are
+/// unavailable).
+fn caption_side_is_bottom(doc: &HtmlDocument, caption_id: usize) -> bool {
+    use ::style::values::computed::table::CaptionSide;
+    doc.get_node(caption_id)
+        .and_then(|n| n.primary_styles())
+        .is_some_and(|s| s.clone_caption_side() == CaptionSide::Bottom)
+}
+
 /// Injects CSS text as a `<style>` element into the document's `<head>`.
 pub struct InjectCssPass {
     pub css: String,
