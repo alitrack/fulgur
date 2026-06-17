@@ -920,4 +920,200 @@ mod tests {
         assert_eq!(tags["type"], "array");
         assert!(tags.get("items").is_none() || tags["items"].is_null());
     }
+
+    // ── Parse error propagation ───────────────────────────────────────────────
+
+    #[test]
+    fn extract_schema_returns_error_on_invalid_syntax() {
+        let result = extract_schema("{{ unclosed", "test.html");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn extract_schema_with_data_returns_error_on_invalid_syntax() {
+        let result = extract_schema_with_data("{{ unclosed", "test.html", &json!({}));
+        assert!(result.is_err());
+    }
+
+    // ── Non-Object data in extract_schema_with_data ───────────────────────────
+
+    #[test]
+    fn schema_with_data_non_object_data_yields_empty_properties() {
+        // data is an array, not an object — no variables can be matched
+        let schema =
+            extract_schema_with_data("{{ title }}", "test.html", &json!([1, 2, 3])).unwrap();
+        assert_eq!(schema["properties"], json!({}));
+    }
+
+    // ── IfCond as the last sibling (no remaining statements) ──────────────────
+
+    #[test]
+    fn if_cond_as_last_stmt_merges_both_branch_scopes_back() {
+        // IfCond is the last child, so the "no remaining" else path in
+        // collect_from_stmts is taken and both branch scopes are merged back.
+        let schema = extract_schema(
+            "{% set x = val %}{% if cond %}{% set x = user %}{% endif %}",
+            "test.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["val"]["type"], "string");
+        assert_eq!(schema["properties"]["user"]["type"], "string");
+        assert_eq!(schema["properties"]["cond"]["type"], "string");
+        // x is a local set variable — must not appear in schema
+        assert!(schema["properties"]["x"].is_null());
+    }
+
+    // ── ForLoop with non-resolvable iterator (literal list) ───────────────────
+
+    #[test]
+    fn for_loop_over_literal_list_treats_loop_var_as_local() {
+        // The iterator `[1, 2, 3]` is a List expression, so iter_path is None;
+        // `item` becomes a local variable with empty path and must not leak.
+        let schema = extract_schema(
+            "{% for item in [1, 2, 3] %}{{ title }}{% endfor %}",
+            "test.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["title"]["type"], "string");
+        assert!(schema["properties"]["item"].is_null());
+    }
+
+    // ── ForLoop else body ─────────────────────────────────────────────────────
+
+    #[test]
+    fn for_loop_else_body_collects_its_variables() {
+        let schema = extract_schema(
+            "{% for item in items %}{{ item }}{% else %}{{ empty_msg }}{% endfor %}",
+            "test.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["items"]["type"], "array");
+        assert_eq!(schema["properties"]["empty_msg"]["type"], "string");
+    }
+
+    // ── Built-in `loop` variable is not collected ─────────────────────────────
+
+    #[test]
+    fn loop_builtin_not_collected_as_schema_variable() {
+        let schema = extract_schema(
+            "{% for item in items %}{{ loop.index }}{% endfor %}",
+            "test.html",
+        )
+        .unwrap();
+        // `loop` is a Jinja built-in — must NOT appear in the inferred schema
+        assert!(schema["properties"]["loop"].is_null());
+        assert_eq!(schema["properties"]["items"]["type"], "array");
+    }
+
+    // ── ensure_array_at_path: non-Array entry converted to Array ──────────────
+
+    #[test]
+    fn var_used_as_scalar_then_as_iter_is_converted_to_array() {
+        // {{ items }} registers `items` as String; {% for x in items %} must
+        // upgrade it to Array via the conversion branch in ensure_array_at_path.
+        let schema = extract_schema(
+            "{{ items }}{% for x in items %}{{ x }}{% endfor %}",
+            "test.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["items"]["type"], "array");
+    }
+
+    // ── ensure_array_at_path: nested path through Object intermediate ─────────
+
+    #[test]
+    fn nested_iter_path_through_object_creates_array_inside_object() {
+        // `table.rows` forces ensure_array_at_path to create Object("table")
+        // first, then Array("rows") inside it.
+        let schema = extract_schema(
+            "{% for row in table.rows %}{{ row.value }}{% endfor %}",
+            "test.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["table"]["type"], "object");
+        let rows = &schema["properties"]["table"]["properties"]["rows"];
+        assert_eq!(rows["type"], "array");
+        assert_eq!(rows["items"]["type"], "object");
+        assert_eq!(rows["items"]["properties"]["value"]["type"], "string");
+    }
+
+    // ── ensure_array_at_path: String entry upgraded to Object then Array ───────
+
+    #[test]
+    fn plain_var_then_nested_iter_upgrades_to_object_with_inner_array() {
+        // {{ data }} registers `data` as String; {% for item in data.rows %}
+        // must upgrade `data` to Object and `rows` to Array via the `_` arm.
+        let schema = extract_schema(
+            "{{ data }}{% for item in data.rows %}{{ item.id }}{% endfor %}",
+            "test.html",
+        )
+        .unwrap();
+        assert_eq!(schema["properties"]["data"]["type"], "object");
+        let rows = &schema["properties"]["data"]["properties"]["rows"];
+        assert_eq!(rows["type"], "array");
+        assert_eq!(rows["items"]["properties"]["id"]["type"], "string");
+    }
+
+    // ── ensure_array_at_path: Array(Object) arm ───────────────────────────────
+
+    #[test]
+    fn attr_access_followed_by_nested_iter_on_same_var_uses_object_arm() {
+        // After item.name upgrades items to Array(Object), the inner for-loop
+        // on item.sub_items must go through the Array(Object) arm in
+        // ensure_array_at_path to add sub_items inside the object.
+        let schema = extract_schema(
+            "{% for item in items %}{{ item.name }}{% for sub in item.sub_items %}{{ sub }}{% endfor %}{% endfor %}",
+            "test.html",
+        )
+        .unwrap();
+        let items = &schema["properties"]["items"];
+        assert_eq!(items["type"], "array");
+        assert_eq!(items["items"]["type"], "object");
+        assert_eq!(items["items"]["properties"]["name"]["type"], "string");
+        assert_eq!(items["items"]["properties"]["sub_items"]["type"], "array");
+    }
+
+    // ── resolve_path: multiple attrs on same loop var merge into one object ─────
+
+    #[test]
+    fn multiple_attrs_on_loop_var_are_merged_into_single_object_schema() {
+        // item.name creates Array(String) → Array(Object(name)); item.age then
+        // goes through the Array(Object) arm to add age without resetting.
+        let schema = extract_schema(
+            "{% for item in items %}{{ item.name }}{{ item.age }}{% endfor %}",
+            "test.html",
+        )
+        .unwrap();
+        let items = &schema["properties"]["items"];
+        assert_eq!(items["type"], "array");
+        assert_eq!(items["items"]["type"], "object");
+        assert_eq!(items["items"]["properties"]["name"]["type"], "string");
+        assert_eq!(items["items"]["properties"]["age"]["type"], "string");
+    }
+
+    // ── resolve_path: String entry upgraded to Object ─────────────────────────
+
+    #[test]
+    fn plain_var_then_attr_access_upgrades_type_to_object() {
+        // {{ user }} registers user as String; {{ user.name }} must upgrade
+        // it to Object via the `_` arm in resolve_path.
+        let schema = extract_schema("{{ user }}{{ user.name }}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["user"]["type"], "object");
+        assert_eq!(
+            schema["properties"]["user"]["properties"]["name"]["type"],
+            "string"
+        );
+    }
+
+    // ── Test expression with positional arg collects the arg variable ──────────
+
+    #[test]
+    fn test_expr_with_variable_arg_collects_arg_as_schema_property() {
+        // `value is divisibleby(divisor)` has a Test arg; divisor must be
+        // collected even though it appears as a test argument, not a direct
+        // template output.
+        let schema = extract_schema("{{ value is divisibleby(divisor) }}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["value"]["type"], "string");
+        assert_eq!(schema["properties"]["divisor"]["type"], "string");
+    }
 }
