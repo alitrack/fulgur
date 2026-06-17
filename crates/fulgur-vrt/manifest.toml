@@ -248,3 +248,10 @@ path = "gcpm/margin-box-implicit-href.html"
 [[fixture]]
 path = "layout/page-name-siblings.html"
 margin_pt = 36.0
+
+# fulgur-78o: <table><caption> rendering via CaptionRestructurePass.
+# Locks in caption-side:top placement (caption above the grid), the
+# caption background/padding, and the table's own borders.
+[[fixture]]
+path = "layout/table-caption-top.html"
+margin_pt = 0.0

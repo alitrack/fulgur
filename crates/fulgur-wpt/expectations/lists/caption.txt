@@ -1,0 +1,15 @@
+# fulgur-78o: table <caption> rendering coverage.
+#
+# These CSS 2.1 reftests assert that `caption-side` does NOT apply to
+# elements whose display is not `table-caption` (001 inline, 003/005
+# variants, 016). fulgur renders them correctly once the caption
+# restructure pass leaves non-<caption> elements untouched, so they are
+# tracked as a regression net for the feature.
+#
+# Other caption-side-applies-to / caption-position reftests in this dir
+# currently FAIL for reasons unrelated to <caption> rendering (block /
+# table-cell layout, external images) and are intentionally not listed.
+PASS  css/CSS2/tables/caption-side-applies-to-001.xht  # caption-side ∉ display:inline
+PASS  css/CSS2/tables/caption-side-applies-to-003.xht  # caption-side applies-to
+PASS  css/CSS2/tables/caption-side-applies-to-005.xht  # caption-side applies-to (shares 001-ref)
+PASS  css/CSS2/tables/caption-side-applies-to-016.xht  # caption-side applies-to (no-red ref)

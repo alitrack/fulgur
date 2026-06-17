@@ -1376,6 +1376,427 @@ fn inject_style_node(
     style_id
 }
 
+/// Collect `(table_id, caption_id)` pairs for every `<table>` that has a
+/// direct `<caption>` child. Only the first caption per table is returned
+/// (per CSS the table generates at most one caption box; additional
+/// captions are rare and out of scope).
+fn collect_caption_tables(doc: &HtmlDocument) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let root = doc.root_element().id;
+    collect_caption_tables_recursive(doc, root, 0, &mut out);
+    out
+}
+
+fn collect_caption_tables_recursive(
+    doc: &HtmlDocument,
+    node_id: usize,
+    depth: usize,
+    out: &mut Vec<(usize, usize)>,
+) {
+    if depth >= MAX_DOM_DEPTH {
+        return;
+    }
+    let Some(node) = doc.get_node(node_id) else {
+        return;
+    };
+    let is_table = node
+        .element_data()
+        .is_some_and(|el| el.name.local.as_ref() == "table");
+    if is_table {
+        if let Some(&caption_id) = node.children.iter().find(|&&child_id| {
+            doc.get_node(child_id)
+                .and_then(|c| c.element_data())
+                .is_some_and(|el| el.name.local.as_ref() == "caption")
+        }) {
+            out.push((node_id, caption_id));
+        }
+    }
+    let children = node.children.clone();
+    for child_id in children {
+        collect_caption_tables_recursive(doc, child_id, depth + 1, out);
+    }
+}
+
+/// Restructures `<table><caption>` so Blitz can lay the caption out.
+///
+/// blitz-dom drops any non-table-typed child of a `<table>` during box
+/// construction (`layout/table.rs` "Probably a table caption: ignore"),
+/// leaving the caption with a 0×0 box and no shaped text — so it never
+/// renders. This pass, which runs before `resolve()`, moves the caption
+/// out of the table and wraps `caption` + `table` in a `width:fit-content`
+/// block container. The caption then becomes an ordinary block flow box
+/// that Blitz constructs and lays out normally, and the standard
+/// convert / paginate / render path picks it up with no further changes.
+/// See `docs/plans/2026-06-17-table-caption-redesign.md`.
+pub struct CaptionRestructurePass;
+
+impl DomPass for CaptionRestructurePass {
+    fn apply(&self, doc: &mut HtmlDocument, _ctx: &PassContext<'_>) {
+        let pairs = collect_caption_tables(doc);
+        if pairs.is_empty() {
+            return;
+        }
+        // `caption-side` and `display` are computed (cascaded) styles, so
+        // resolve once to read them. This pass runs before the engine's own
+        // `resolve()`, which re-resolves the restructured tree afterwards; the
+        // extra resolve is paid only when the document actually contains a
+        // captioned table.
+        resolve(doc);
+        for (table_id, caption_id) in pairs {
+            // Respect a cascade that hides the caption or its table
+            // (fulgur-uoao). Blitz drops a non-table-typed child of `<table>`
+            // during box construction, so a *skipped* caption simply stays
+            // unrendered — exactly what a hidden caption / hidden table should
+            // do. Restructuring would instead lift the caption into a visible
+            // in-flow wrapper and leak text the cascade meant to hide. We read
+            // the cascade *before* moving the caption, so a selector that only
+            // matches in the original tree (e.g. `table > caption { visibility:
+            // hidden }`) is still honoured here even though the move would later
+            // break it. Skip on `display: none` (caption or table) and on a
+            // `visibility: hidden` / `collapse` caption or table.
+            if display_is_none(doc, table_id)
+                || display_is_none(doc, caption_id)
+                || visibility_is_hidden(doc, table_id)
+                || visibility_is_hidden(doc, caption_id)
+            {
+                continue;
+            }
+            // Only override the UA `display: table-caption`; an explicit author
+            // display (e.g. `caption { display: block }`) is already non-table
+            // so Stylo will not re-wrap it, and clobbering it would lose the
+            // author's cascade intent.
+            let force_block = caption_display_is_table_caption(doc, caption_id);
+            // `caption-side` only applies to `display: table-caption`. For an
+            // author override to a non-table-caption display it does not apply,
+            // so the caption keeps source order (before the table) — hence the
+            // gate on `force_block`.
+            let on_bottom = force_block && caption_side_is_bottom(doc, caption_id);
+            let mut mutator = doc.mutate();
+            let wrapper_id = mutator.create_element(make_qual_name("div"), vec![]);
+            // `fit-content` keeps the wrapper at the table's width when the
+            // caption is narrower; a wider caption clamps to the available
+            // (page) width and wraps.
+            mutator.set_style_property(wrapper_id, "display", "block");
+            mutator.set_style_property(wrapper_id, "width", "fit-content");
+            // Override the UA `display: table-caption` so the moved caption
+            // is a plain block (otherwise Stylo wraps it in an anonymous
+            // table box again).
+            if force_block {
+                mutator.set_style_property(caption_id, "display", "block");
+            }
+            // Put the wrapper where the table was, then move caption + table
+            // into it. `caption-side: top` (default) → caption first;
+            // `bottom` → table first.
+            mutator.replace_node_with(table_id, &[wrapper_id]);
+            if on_bottom {
+                mutator.append_children(wrapper_id, &[table_id, caption_id]);
+            } else {
+                mutator.append_children(wrapper_id, &[caption_id, table_id]);
+            }
+        }
+    }
+}
+
+/// Read the resolved `caption-side` of a caption node. Returns `true` for
+/// `bottom`, `false` for `top` (the default, also used when styles are
+/// unavailable).
+fn caption_side_is_bottom(doc: &HtmlDocument, caption_id: usize) -> bool {
+    use ::style::values::computed::table::CaptionSide;
+    doc.get_node(caption_id)
+        .and_then(|n| n.primary_styles())
+        .is_some_and(|s| s.clone_caption_side() == CaptionSide::Bottom)
+}
+
+/// True when the cascade computed `display: none` for `node_id`. A node with
+/// no resolved styles is treated as not-hidden — the caption restructure pass
+/// only *skips* on an explicit hidden cascade, never on missing styles.
+fn display_is_none(doc: &HtmlDocument, node_id: usize) -> bool {
+    doc.get_node(node_id)
+        .and_then(|n| n.primary_styles())
+        .is_some_and(|s| s.clone_display().is_none())
+}
+
+/// True when the cascade computed a non-`visible` `visibility` (i.e. `hidden`
+/// or `collapse`) for `node_id`. Used to keep a `visibility: hidden` table
+/// from leaking its caption: fulgur already suppresses such a table's cells,
+/// so restructuring would otherwise move the caption into a visible wrapper
+/// where it re-inherits `visible` and renders alone (fulgur-uoao).
+fn visibility_is_hidden(doc: &HtmlDocument, node_id: usize) -> bool {
+    use style::properties::longhands::visibility::computed_value::T as Visibility;
+    doc.get_node(node_id)
+        .and_then(|n| n.primary_styles())
+        .is_some_and(|s| s.clone_visibility() != Visibility::Visible)
+}
+
+/// True when the caption still carries the UA default `display: table-caption`
+/// (the author did not override `display`). Only in that case must the pass
+/// force `display: block`; any explicit author display is left intact.
+fn caption_display_is_table_caption(doc: &HtmlDocument, caption_id: usize) -> bool {
+    use ::style::values::specified::box_::Display;
+    doc.get_node(caption_id)
+        .and_then(|n| n.primary_styles())
+        .is_some_and(|s| s.clone_display() == Display::TableCaption)
+}
+
+#[cfg(test)]
+mod caption_restructure_tests {
+    use super::*;
+
+    /// `(table_id, caption_id)` lookup by element local name, for asserting
+    /// `collect_caption_tables` returns the structurally-correct pairs without
+    /// hard-coding Blitz node ids.
+    fn tag_of(doc: &HtmlDocument, id: usize) -> Option<String> {
+        doc.get_node(id)
+            .and_then(|n| n.element_data())
+            .map(|el| el.name.local.as_ref().to_string())
+    }
+
+    #[test]
+    fn collect_caption_tables_finds_direct_caption_child() {
+        let doc = parse(
+            r#"<html><body>
+                 <table><caption>C</caption><tbody><tr><td>x</td></tr></tbody></table>
+               </body></html>"#,
+            600.0,
+            &[],
+        );
+        let pairs = collect_caption_tables(&doc);
+        assert_eq!(pairs.len(), 1, "exactly one captioned table");
+        let (table_id, caption_id) = pairs[0];
+        assert_eq!(tag_of(&doc, table_id).as_deref(), Some("table"));
+        assert_eq!(tag_of(&doc, caption_id).as_deref(), Some("caption"));
+    }
+
+    #[test]
+    fn collect_caption_tables_returns_only_first_caption() {
+        let doc = parse(
+            r#"<html><body>
+                 <table><caption>FIRST</caption><caption>SECOND</caption>
+                   <tbody><tr><td>x</td></tr></tbody></table>
+               </body></html>"#,
+            600.0,
+            &[],
+        );
+        let pairs = collect_caption_tables(&doc);
+        // One pair per table even with two captions: the first child caption.
+        assert_eq!(pairs.len(), 1);
+        // The collected caption must be the *first* one in document order.
+        let (_table_id, caption_id) = pairs[0];
+        let first_caption_text = doc
+            .get_node(caption_id)
+            .map(|n| n.children.len())
+            .unwrap_or(0);
+        assert!(first_caption_text > 0, "first caption has a text child");
+    }
+
+    #[test]
+    fn collect_caption_tables_ignores_table_without_caption() {
+        let doc = parse(
+            r#"<html><body>
+                 <table><tbody><tr><td>x</td></tr></tbody></table>
+               </body></html>"#,
+            600.0,
+            &[],
+        );
+        assert!(collect_caption_tables(&doc).is_empty());
+    }
+
+    #[test]
+    fn collect_caption_tables_handles_nested_tables() {
+        // A caption inside an outer table's cell belongs to the inner table,
+        // not the outer one. Both captioned tables must be collected.
+        let doc = parse(
+            r#"<html><body>
+                 <table><caption>OUTER</caption><tbody><tr><td>
+                   <table><caption>INNER</caption><tbody><tr><td>x</td></tr></tbody></table>
+                 </td></tr></tbody></table>
+               </body></html>"#,
+            600.0,
+            &[],
+        );
+        let pairs = collect_caption_tables(&doc);
+        assert_eq!(pairs.len(), 2, "both outer and inner captioned tables");
+        for (table_id, caption_id) in pairs {
+            assert_eq!(tag_of(&doc, table_id).as_deref(), Some("table"));
+            assert_eq!(tag_of(&doc, caption_id).as_deref(), Some("caption"));
+        }
+    }
+
+    #[test]
+    fn collect_caption_tables_recursive_respects_depth_limit() {
+        // Beyond MAX_DOM_DEPTH the walk bails out, so a caption nested deeper
+        // than the limit is not collected. Build a chain just past the cap.
+        let mut html = String::from("<html><body>");
+        for _ in 0..(MAX_DOM_DEPTH + 5) {
+            html.push_str("<div>");
+        }
+        html.push_str("<table><caption>DEEP</caption><tbody><tr><td>x</td></tr></tbody></table>");
+        for _ in 0..(MAX_DOM_DEPTH + 5) {
+            html.push_str("</div>");
+        }
+        html.push_str("</body></html>");
+        let doc = parse(&html, 600.0, &[]);
+        // The deeply-buried caption is past the recursion cap → not collected.
+        assert!(
+            collect_caption_tables(&doc).is_empty(),
+            "caption nested past MAX_DOM_DEPTH must not be collected"
+        );
+    }
+
+    #[test]
+    fn caption_side_is_bottom_reads_computed_value() {
+        for (side, expect_bottom) in [("top", false), ("bottom", true)] {
+            let mut doc = parse(
+                &format!(
+                    r#"<html><head><style>caption {{ caption-side: {side}; }}</style></head>
+                       <body><table><caption>C</caption>
+                         <tbody><tr><td>x</td></tr></tbody></table></body></html>"#
+                ),
+                600.0,
+                &[],
+            );
+            resolve(&mut doc);
+            let (_table_id, caption_id) = collect_caption_tables(&doc)[0];
+            assert_eq!(
+                caption_side_is_bottom(&doc, caption_id),
+                expect_bottom,
+                "caption-side: {side}"
+            );
+        }
+    }
+
+    #[test]
+    fn caption_side_is_bottom_defaults_to_top() {
+        let mut doc = parse(
+            r#"<html><body><table><caption>C</caption>
+                 <tbody><tr><td>x</td></tr></tbody></table></body></html>"#,
+            600.0,
+            &[],
+        );
+        resolve(&mut doc);
+        let (_table_id, caption_id) = collect_caption_tables(&doc)[0];
+        assert!(
+            !caption_side_is_bottom(&doc, caption_id),
+            "default caption-side is top"
+        );
+    }
+
+    #[test]
+    fn display_is_none_detects_author_hidden_caption() {
+        // Caption hidden, table visible: blitz resolves the caption's own
+        // cascade (its box is dropped, but the style is still computed), so
+        // the pass can see the author `display: none`.
+        let mut doc = parse(
+            r#"<html><head><style>caption { display: none; }</style></head>
+               <body><table><caption>C</caption>
+                 <tbody><tr><td>x</td></tr></tbody></table></body></html>"#,
+            600.0,
+            &[],
+        );
+        resolve(&mut doc);
+        let (_table_id, caption_id) = collect_caption_tables(&doc)[0];
+        assert!(display_is_none(&doc, caption_id), "author-hidden caption");
+    }
+
+    #[test]
+    fn display_is_none_detects_hidden_table() {
+        // Table hidden: the table's own style resolves to `display: none`,
+        // which is what the pass keys off to skip restructuring (leaving the
+        // caption inside the hidden subtree, where blitz drops it).
+        let mut doc = parse(
+            r#"<html><head><style>table { display: none; }</style></head>
+               <body><table><caption>C</caption>
+                 <tbody><tr><td>x</td></tr></tbody></table></body></html>"#,
+            600.0,
+            &[],
+        );
+        resolve(&mut doc);
+        let (table_id, _caption_id) = collect_caption_tables(&doc)[0];
+        assert!(display_is_none(&doc, table_id), "hidden table");
+    }
+
+    #[test]
+    fn display_is_none_false_for_visible_nodes() {
+        let mut doc = parse(
+            r#"<html><body><table><caption>C</caption>
+                 <tbody><tr><td>x</td></tr></tbody></table></body></html>"#,
+            600.0,
+            &[],
+        );
+        resolve(&mut doc);
+        let (table_id, caption_id) = collect_caption_tables(&doc)[0];
+        assert!(!display_is_none(&doc, caption_id));
+        assert!(!display_is_none(&doc, table_id));
+    }
+
+    #[test]
+    fn visibility_is_hidden_detects_hidden_and_collapse_tables() {
+        for value in ["hidden", "collapse"] {
+            let mut doc = parse(
+                &format!(
+                    r#"<html><head><style>table {{ visibility: {value}; }}</style></head>
+                       <body><table><caption>C</caption>
+                         <tbody><tr><td>x</td></tr></tbody></table></body></html>"#
+                ),
+                600.0,
+                &[],
+            );
+            resolve(&mut doc);
+            let (table_id, _caption_id) = collect_caption_tables(&doc)[0];
+            assert!(
+                visibility_is_hidden(&doc, table_id),
+                "visibility: {value} must count as hidden"
+            );
+        }
+    }
+
+    #[test]
+    fn visibility_is_hidden_false_for_visible_table() {
+        let mut doc = parse(
+            r#"<html><body><table><caption>C</caption>
+                 <tbody><tr><td>x</td></tr></tbody></table></body></html>"#,
+            600.0,
+            &[],
+        );
+        resolve(&mut doc);
+        let (table_id, _caption_id) = collect_caption_tables(&doc)[0];
+        assert!(!visibility_is_hidden(&doc, table_id));
+    }
+
+    #[test]
+    fn caption_display_is_table_caption_distinguishes_ua_default_from_override() {
+        // UA default: no author display → table-caption.
+        let mut ua = parse(
+            r#"<html><body><table><caption>C</caption>
+                 <tbody><tr><td>x</td></tr></tbody></table></body></html>"#,
+            600.0,
+            &[],
+        );
+        resolve(&mut ua);
+        let (_t, cap) = collect_caption_tables(&ua)[0];
+        assert!(
+            caption_display_is_table_caption(&ua, cap),
+            "UA default caption display is table-caption"
+        );
+
+        // Author override: `caption { display: block }` is no longer
+        // table-caption, so the pass must not clobber it.
+        let mut overridden = parse(
+            r#"<html><head><style>caption { display: block; }</style></head>
+               <body><table><caption>C</caption>
+                 <tbody><tr><td>x</td></tr></tbody></table></body></html>"#,
+            600.0,
+            &[],
+        );
+        resolve(&mut overridden);
+        let (_t2, cap2) = collect_caption_tables(&overridden)[0];
+        assert!(
+            !caption_display_is_table_caption(&overridden, cap2),
+            "author display:block is not the UA table-caption default"
+        );
+    }
+}
+
 /// Injects CSS text as a `<style>` element into the document's `<head>`.
 pub struct InjectCssPass {
     pub css: String,
