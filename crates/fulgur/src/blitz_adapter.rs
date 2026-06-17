@@ -1448,13 +1448,16 @@ impl DomPass for CaptionRestructurePass {
             // during box construction, so a *skipped* caption simply stays
             // unrendered — exactly what a hidden caption / hidden table should
             // do. Restructuring would instead lift the caption into a visible
-            // in-flow wrapper and leak text the cascade meant to hide. We skip
-            // on `display: none` (caption or table) and on a table that is
-            // `visibility: hidden` / `collapse`: fulgur already hides such a
-            // table's cells, so only the moved caption would leak otherwise.
+            // in-flow wrapper and leak text the cascade meant to hide. We read
+            // the cascade *before* moving the caption, so a selector that only
+            // matches in the original tree (e.g. `table > caption { visibility:
+            // hidden }`) is still honoured here even though the move would later
+            // break it. Skip on `display: none` (caption or table) and on a
+            // `visibility: hidden` / `collapse` caption or table.
             if display_is_none(doc, table_id)
                 || display_is_none(doc, caption_id)
                 || visibility_is_hidden(doc, table_id)
+                || visibility_is_hidden(doc, caption_id)
             {
                 continue;
             }

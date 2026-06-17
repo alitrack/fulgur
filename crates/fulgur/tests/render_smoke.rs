@@ -4530,6 +4530,25 @@ fn table_caption_visibility_hidden_table_does_not_leak_caption() {
     );
 }
 
+/// fulgur-uoao: a caption hidden via `visibility: hidden` must not render —
+/// including a descendant selector like `table > caption` that only matches
+/// before the restructure moves the caption out of the table. The pass reads
+/// the cascade pre-move, so the rule is honoured. coderabbit review on #487.
+#[test]
+fn table_caption_visibility_hidden_caption_does_not_leak() {
+    assert_eq!(
+        caption_big_text_count("caption { visibility: hidden; }"),
+        0,
+        "a visibility:hidden caption (element selector) must stay hidden"
+    );
+    assert_eq!(
+        caption_big_text_count("table > caption { visibility: hidden; }"),
+        0,
+        "a visibility:hidden caption (descendant selector, broken by the move) \
+         must still stay hidden because the cascade is read pre-restructure"
+    );
+}
+
 /// fulgur-uoao: `caption-side` only applies to `display: table-caption`.
 /// When an author overrides the caption to `display: block`, `caption-side`
 /// must not apply and the caption keeps source order (above the table). The

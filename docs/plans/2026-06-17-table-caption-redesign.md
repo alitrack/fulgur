@@ -230,8 +230,10 @@ style を読んで修正済み:
   非表示が保たれる）。
 - **`visibility: hidden` の漏れ**: `table { visibility: hidden }` ではセルは正しく
   非表示になるのに caption だけが visible な wrapper へ移って漏れていた（不整合な
-  half-hidden）。table が `visibility: hidden` / `collapse` → restructure を skip し、
-  table 全体を非表示に揃える。
+  half-hidden）。table **または caption** が `visibility: hidden` / `collapse` →
+  restructure を skip。caption 側は `table > caption { visibility: hidden }` のように
+  **移動で外れる子セレクタ**でも漏れるが、cascade を移動前に読むため pre-resolve 時点
+  （caption はまだ table の子でセレクタ一致）で正しく検出できる。
 - **display 上書きのゲート**: caption の `display: block` 強制は UA 既定（`table-caption`）の
   ときだけ（著者の明示 display は温存）。
 - **`caption-side` のゲート**: `caption-side` は `display: table-caption` にのみ適用される
@@ -243,6 +245,7 @@ style を読んで修正済み:
 `table_caption_display_none_is_not_rendered` /
 `table_caption_hidden_table_does_not_leak_caption` /
 `table_caption_visibility_hidden_table_does_not_leak_caption` /
+`table_caption_visibility_hidden_caption_does_not_leak` /
 `table_caption_side_ignored_for_non_table_caption_display`。
 
 ## 5. テスト計画
