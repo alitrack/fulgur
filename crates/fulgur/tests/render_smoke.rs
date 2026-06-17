@@ -4457,6 +4457,66 @@ fn table_with_two_captions_does_not_panic() {
     assert!(pdf.starts_with(b"%PDF"));
 }
 
+/// Helper: number of large-font (caption-sized) text items rendered for a
+/// captioned table whose `<style>` block is `extra_css`. The caption uses a
+/// 28px font so it is distinguishable from the 12px cells. fulgur-uoao.
+fn caption_big_text_count(extra_css: &str) -> usize {
+    use fulgur::inspect::inspect;
+    let html = format!(
+        r#"<!doctype html><html><head><style>
+          caption {{ font-size: 28px; }}
+          td {{ font-size: 12px; }}
+          {extra_css}
+        </style></head><body>
+          <table><caption>CAP</caption>
+            <tbody><tr><td>cellone</td></tr></tbody>
+          </table>
+        </body></html>"#
+    );
+    let pdf = noto_engine()
+        .render_html(&html)
+        .expect("render must succeed");
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("caption-display.pdf");
+    std::fs::write(&path, &pdf).expect("write pdf");
+    let inspected = inspect(&path).expect("inspect pdf");
+    inspected
+        .text_items
+        .iter()
+        .filter(|t| t.font_size > 15.0)
+        .count()
+}
+
+/// fulgur-uoao: an author `caption { display: none }` must keep the caption
+/// out of the PDF. The restructure pass used to force inline `display: block`
+/// unconditionally, overriding the cascade and leaking hidden caption text.
+#[test]
+fn table_caption_display_none_is_not_rendered() {
+    assert_eq!(
+        caption_big_text_count("caption { display: none; }"),
+        0,
+        "a display:none caption must not render"
+    );
+    // Sanity: the same fixture without the override does render the caption.
+    assert_eq!(
+        caption_big_text_count(""),
+        1,
+        "a visible caption must render exactly one large-font item"
+    );
+}
+
+/// fulgur-uoao: a hidden table (`table { display: none }`) must not leak its
+/// caption into the output. Restructuring would otherwise move the caption
+/// into a visible wrapper while the table stayed suppressed.
+#[test]
+fn table_caption_hidden_table_does_not_leak_caption() {
+    assert_eq!(
+        caption_big_text_count("table { display: none; }"),
+        0,
+        "a caption under a display:none table must stay hidden"
+    );
+}
+
 /// fulgur-78o: `caption-side` must be honored even when supplied through
 /// engine-injected CSS (`AssetBundle::add_css`) rather than a document
 /// `<style>`. The caption restructure pass's pre-resolve must run after

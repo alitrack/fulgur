@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>VRT fixture: layout/table-caption-top</title>
+<!--
+  fulgur-78o: CaptionRestructurePass renders a <table>'s <caption> by moving
+  it into a fit-content block wrapper before layout. This golden locks in the
+  default caption-side:top placement (caption above the grid), the caption's
+  background/padding, and that the table keeps its own borders — i.e. the
+  caption flows as an ordinary block box on the standard convert/render path.
+  A width:100% table (the primary SaaS report case) keeps full width with the
+  caption present; the caption background spans the same width above it.
+-->
+<style>
+  html,body{margin:0;padding:0}
+  body{font:14pt 'Noto Sans', sans-serif;padding:40px}
+  table{border-collapse:collapse;width:100%}
+  caption{background:#1e88e5;color:#fff;padding:8px;font-weight:bold}
+  td{border:2px solid #43a047;padding:10px;background:#e3f2fd}
+</style>
+</head><body>
+<table>
+  <caption>Quarterly totals</caption>
+  <tbody>
+    <tr><td>North</td><td>120</td></tr>
+    <tr><td>South</td><td>240</td></tr>
+  </tbody>
+</table>
+</body></html>

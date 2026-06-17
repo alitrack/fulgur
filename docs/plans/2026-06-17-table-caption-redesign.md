@@ -177,6 +177,49 @@ ID / アンカーも保持。
 - `<colgroup>` / `<col>`（無関係だが調査中に未対応と判明。別 issue 候補）
 - upstream Blitz への caption レイアウト実装（別 tracking issue / contributor 路線）
 
+#### 4.2.1 synthetic wrapper が table-level の box セマンティクスを引き継がない（fulgur-vdd1）
+
+approach B は `<table>` を fit-content の `<div>` wrapper で「置換」して caption を
+その中へ移すため、CSS の table wrapper box 相当の外側 box が **合成 div** になる。
+このため、**caption を持つテーブルに限って** 次が崩れる（PR #487 のレビューで網羅的に
+洗い出し）。いずれも real だが niche で、まとめて fulgur-vdd1 で追跡:
+
+- `position: absolute` / `fixed`、`float`、`transform`（合成 div ではなく内側 table に
+  残る）
+- flex / grid item placement（`flex` / `order` / `align-self` / `grid-column` が table に残る）
+- 親スコープ・兄弟・子孫セレクタ（`body > table.report` / `table + p` / `table > caption`）が
+  wrapper 挿入で不一致になる
+- `display: inline-table`（合成 div が block のため別行に押し出される）
+- フラグメンテーション（`break-inside: avoid` / `break-before: page` が内側 table にしか効かず
+  caption が分離しうる）
+- GCPM: `caption-side: bottom` で caption が table の後ろに移動し、後続の
+  `CounterPass` / `StringSetPass` が見る DOM 順が変わる。`position: running()` の table を
+  `RunningElementPass` がシリアライズする時点で caption は既に外に出ている
+- PDF/UA: `tagging::classify_element` に caption case が無く marked content が開かれない
+- 合成 div が author の `div { … }` ルールに当たりうる（緩和候補: div 以外の wrapper 要素名）
+- fit-content wrapper は狭いテーブルでも実質ページ幅まで広がり、caption 背景がテーブル幅に
+  縮まらない（3.3 の理想とは逆方向の乖離。ただしこの全幅化のおかげで `margin: 0 auto`
+  センタリングと `width: 100%` 全幅は実測で **非回帰**——下記 §7 参照）
+
+**不採用の緩和策**: gemini レビューが提案した「table の `style` / `class` を wrapper へ
+コピー」は、margin の二重適用・背景の二重描画・class セレクタの wrapper/table 両当たりの
+リスクがあり却下。共通ケース（センタリング・全幅）は実測でコピー無しに動くため、
+各制限は fulgur-vdd1 で追跡し本節に明記する方針。
+
+#### 4.2.2 author の `display: none` 尊重（fulgur-uoao、対応済み）
+
+旧実装は caption に inline `display: block` を無条件で強制していたため、
+`caption { display: none }`（著者 CSS）や `table { display: none }` 配下の caption が
+PDF に漏れていた（実測で確認）。pre-resolve 済み computed display を読み、
+
+- table または caption が `display: none` → restructure を skip（caption は table 配下の
+  まま Blitz に drop され、結果として非表示が保たれる）
+- caption の display 上書きは UA 既定（`table-caption`）のときだけ（著者の明示 display は温存）
+
+に修正済み。`caption_restructure_tests` の単体テストと render_smoke の
+`table_caption_display_none_is_not_rendered` / `table_caption_hidden_table_does_not_leak_caption`
+で検証。
+
 ## 5. テスト計画
 
 CLAUDE.md の coverage 規約に従い VRT と lib 側の両方を置く:
@@ -216,9 +259,17 @@ CLAUDE.md の coverage 規約に従い VRT と lib 側の両方を置く:
   `table_caption_text_renders_in_pdf` / `table_caption_side_top_renders_above_table` /
   `table_caption_side_bottom_renders_below_table` / `table_caption_side_bottom_via_injected_css` /
   `table_caption_with_nested_inline_renders` / `table_with_two_captions_does_not_panic` /
-  `table_caption_preserves_full_width_table`。
-- 描画は既存の block/paragraph 経路を通り新 draw arm は無いため、codecov は render_smoke で充足。
-  VRT golden は未追加（視覚回帰の保険として将来追加可）。
+  `table_caption_preserves_full_width_table` /
+  `table_caption_display_none_is_not_rendered` / `table_caption_hidden_table_does_not_leak_caption`
+  （後ろ 2 つは fulgur-uoao の回帰ガード）。
+- pure helper の単体テスト（`blitz_adapter::caption_restructure_tests`）:
+  `collect_caption_tables` の直下 caption のみ収集・nested table・`MAX_DOM_DEPTH` 上限、
+  `caption_side_is_bottom` の top/bottom 判定、`display_is_none` /
+  `caption_display_is_table_caption` を網羅（coderabbit 指摘の coverage 規約対応）。
+- 描画は既存の block/paragraph 経路を通り新 draw arm は無いため codecov は render_smoke で充足するが、
+  CLAUDE.md の VRT+smoke 規約に合わせ VRT golden も追加:
+  `crates/fulgur-vrt/fixtures/layout/table-caption-top.html`（caption-side:top・背景付き caption・
+  width:100% テーブル）+ `goldens/fulgur/layout/table-caption-top.pdf`。
 
 ### 7.1 WPT coverage
 
