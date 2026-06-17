@@ -219,3 +219,12 @@ CLAUDE.md の coverage 規約に従い VRT と lib 側の両方を置く:
   `table_caption_preserves_full_width_table`。
 - 描画は既存の block/paragraph 経路を通り新 draw arm は無いため、codecov は render_smoke で充足。
   VRT golden は未追加（視覚回帰の保険として将来追加可）。
+
+### 7.1 WPT coverage
+
+`css/CSS2/tables/caption-side-applies-to-{001,003,005,016}` を
+`expectations/lists/caption.txt` に PASS として追跡（`scripts/wpt/subset.txt` に
+テスト + ref を追加）。これらは「`caption-side` が `table-caption` 以外の display に
+効かない」ことを検証する reftest で、再構成パスが非 `<caption>` 要素を触らないため通る。
+同ディレクトリの他の caption reftest（caption-position-001 等）は block / table-cell
+レイアウトや外部画像など本機能と無関係な理由で現状 FAIL するため、意図的に未追跡。

@@ -136,3 +136,13 @@ css/css-images/repeating-conic-gradient-ref.html
 css/css-images/tiled-conic-gradients.html
 css/css-images/tiled-conic-gradients-ref.html
 css/css-images/reference/200x200-blue-black-green-red.html
+
+# fulgur-78o: table <caption> rendering — caption-side reftests that fulgur
+# passes (expectations/lists/caption.txt). 005 shares 001-ref; 016 uses the
+# shared css/CSS2/reference/no-red-on-blank-page-ref.xht (listed above).
+css/CSS2/tables/caption-side-applies-to-001.xht
+css/CSS2/tables/caption-side-applies-to-001-ref.html
+css/CSS2/tables/caption-side-applies-to-003.xht
+css/CSS2/tables/caption-side-applies-to-003-ref.html
+css/CSS2/tables/caption-side-applies-to-005.xht
+css/CSS2/tables/caption-side-applies-to-016.xht
