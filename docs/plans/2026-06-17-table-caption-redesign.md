@@ -157,10 +157,18 @@ ID / アンカーも保持。
 `width:fit-content` は `min(max-content, max(min-content, available))`。available は
 ページ content 幅。
 
+設計時はこう予測していた:
+
 - caption ≤ テーブル幅 → wrapper = テーブル幅、caption がそれを埋める（理想）
 - caption > テーブル幅 → wrapper はページ幅で頭打ち、caption 折り返し、テーブルは自幅のまま
-  上寄せ。CSS 仕様（テーブル幅が caption の min-content まで伸びる）とは軽微に乖離するが
-  実用上許容。v1 の既知挙動として明記する。
+  上寄せ。
+
+> **実装後の訂正（PR #487 で実測）**: 上記の「wrapper = テーブル幅」は**実際には起きない**。
+> 狭い（例 `width:260px`）テーブルでも合成 wrapper は実質ページ幅まで広がり、caption 背景は
+> テーブル幅に縮まらない（理想とは逆方向の乖離）。一方で **この全幅化のおかげで**、内側
+> テーブルの `margin:0 auto` センタリングと `width:100%` 全幅は caption 有無で非回帰になる
+> （§7・§4.2.1）。つまり 3.3 の理想（caption をテーブル幅に縮める）を実装すると
+> センタリング非回帰の根拠が崩れるトレードオフがある。詳細と追跡は fulgur-vdd1。
 
 ## 4. スコープ
 
@@ -253,8 +261,12 @@ CLAUDE.md の coverage 規約に従い VRT と lib 側の両方を置く:
   wrapper の子順序（top→`[caption, table]` / bottom→`[table, caption]`）に反映。
 - `width:fit-content` wrapper の懸念（全幅テーブルの縮小）は実測で**非回帰**を確認:
   `width:100%` テーブルは caption 有無で右列 x が不変（全幅維持）、`margin:0 auto` テーブルも
-  cell 位置が caption 有無で不変（センタリング維持）。Taffy が wrapper↔テーブル幅の循環を
-  正しく解いている。
+  cell 位置が caption 有無で不変（センタリング維持、PR #487 で 225.4pt 不変を再計測）。
+  - **機序の訂正（PR #487）**: 当初これを「Taffy が wrapper↔テーブル幅の循環を正しく解いている」
+    と書いたが、実際は逆で **合成 wrapper が fit-content にもかかわらず実質ページ幅まで広がる**
+    ため、内側テーブルが全幅 wrapper の中で従来どおりセンタリング/全幅化される、という機序。
+    狭いテーブルでも wrapper は縮まない（§3.3 の訂正・§4.2.1）。この全幅化と centering 非回帰は
+    表裏一体で、片方を「直す」と他方が回帰する（fulgur-vdd1 に記録）。
 - テスト（`crates/fulgur/tests/render_smoke.rs`）:
   `table_caption_text_renders_in_pdf` / `table_caption_side_top_renders_above_table` /
   `table_caption_side_bottom_renders_below_table` / `table_caption_side_bottom_via_injected_css` /
