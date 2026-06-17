@@ -4517,6 +4517,60 @@ fn table_caption_hidden_table_does_not_leak_caption() {
     );
 }
 
+/// fulgur-uoao: a `visibility: hidden` table must not leak its caption.
+/// fulgur already suppresses the table's cells; without skipping the
+/// restructure, the moved caption re-inherits `visible` from the wrapper and
+/// renders alone (an inconsistent half-hidden table). Codex review on #487.
+#[test]
+fn table_caption_visibility_hidden_table_does_not_leak_caption() {
+    assert_eq!(
+        caption_big_text_count("table { visibility: hidden; }"),
+        0,
+        "a caption under a visibility:hidden table must stay hidden"
+    );
+}
+
+/// fulgur-uoao: `caption-side` only applies to `display: table-caption`.
+/// When an author overrides the caption to `display: block`, `caption-side`
+/// must not apply and the caption keeps source order (above the table). The
+/// 28px caption sits above the 12px cells. Codex review on #487.
+#[test]
+fn table_caption_side_ignored_for_non_table_caption_display() {
+    use fulgur::inspect::inspect;
+    let html = r#"<!doctype html><html><head><style>
+          caption { display: block; caption-side: bottom; font-size: 28px; }
+          td { font-size: 12px; }
+        </style></head><body>
+          <table><caption>CAP</caption>
+            <tbody><tr><td>cellone</td></tr><tr><td>celltwo</td></tr></tbody>
+          </table>
+        </body></html>"#;
+    let pdf = noto_engine()
+        .render_html(html)
+        .expect("render must succeed");
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("caption-block-bottom.pdf");
+    std::fs::write(&path, &pdf).expect("write pdf");
+    let inspected = inspect(&path).expect("inspect pdf");
+    let caption_y = inspected
+        .text_items
+        .iter()
+        .find(|t| t.font_size > 15.0)
+        .map(|t| t.y)
+        .expect("caption text item must render");
+    let max_cell_y = inspected
+        .text_items
+        .iter()
+        .filter(|t| t.font_size <= 15.0)
+        .map(|t| t.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        caption_y > max_cell_y,
+        "display:block caption ignores caption-side:bottom and stays above the table \
+         (caption y={caption_y}, max cell y={max_cell_y})"
+    );
+}
+
 /// fulgur-78o: `caption-side` must be honored even when supplied through
 /// engine-injected CSS (`AssetBundle::add_css`) rather than a document
 /// `<style>`. The caption restructure pass's pre-resolve must run after

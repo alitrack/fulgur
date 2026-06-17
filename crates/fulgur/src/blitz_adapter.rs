@@ -1443,21 +1443,31 @@ impl DomPass for CaptionRestructurePass {
         // captioned table.
         resolve(doc);
         for (table_id, caption_id) in pairs {
-            // Respect an author `display: none` on the caption or its table
+            // Respect a cascade that hides the caption or its table
             // (fulgur-uoao). Blitz drops a non-table-typed child of `<table>`
             // during box construction, so a *skipped* caption simply stays
             // unrendered — exactly what a hidden caption / hidden table should
             // do. Restructuring would instead lift the caption into a visible
-            // in-flow wrapper and leak text the cascade meant to hide.
-            if display_is_none(doc, table_id) || display_is_none(doc, caption_id) {
+            // in-flow wrapper and leak text the cascade meant to hide. We skip
+            // on `display: none` (caption or table) and on a table that is
+            // `visibility: hidden` / `collapse`: fulgur already hides such a
+            // table's cells, so only the moved caption would leak otherwise.
+            if display_is_none(doc, table_id)
+                || display_is_none(doc, caption_id)
+                || visibility_is_hidden(doc, table_id)
+            {
                 continue;
             }
-            let on_bottom = caption_side_is_bottom(doc, caption_id);
             // Only override the UA `display: table-caption`; an explicit author
             // display (e.g. `caption { display: block }`) is already non-table
             // so Stylo will not re-wrap it, and clobbering it would lose the
             // author's cascade intent.
             let force_block = caption_display_is_table_caption(doc, caption_id);
+            // `caption-side` only applies to `display: table-caption`. For an
+            // author override to a non-table-caption display it does not apply,
+            // so the caption keeps source order (before the table) — hence the
+            // gate on `force_block`.
+            let on_bottom = force_block && caption_side_is_bottom(doc, caption_id);
             let mut mutator = doc.mutate();
             let wrapper_id = mutator.create_element(make_qual_name("div"), vec![]);
             // `fit-content` keeps the wrapper at the table's width when the
@@ -1501,6 +1511,18 @@ fn display_is_none(doc: &HtmlDocument, node_id: usize) -> bool {
     doc.get_node(node_id)
         .and_then(|n| n.primary_styles())
         .is_some_and(|s| s.clone_display().is_none())
+}
+
+/// True when the cascade computed a non-`visible` `visibility` (i.e. `hidden`
+/// or `collapse`) for `node_id`. Used to keep a `visibility: hidden` table
+/// from leaking its caption: fulgur already suppresses such a table's cells,
+/// so restructuring would otherwise move the caption into a visible wrapper
+/// where it re-inherits `visible` and renders alone (fulgur-uoao).
+fn visibility_is_hidden(doc: &HtmlDocument, node_id: usize) -> bool {
+    use style::properties::longhands::visibility::computed_value::T as Visibility;
+    doc.get_node(node_id)
+        .and_then(|n| n.primary_styles())
+        .is_some_and(|s| s.clone_visibility() != Visibility::Visible)
 }
 
 /// True when the caption still carries the UA default `display: table-caption`
@@ -1702,6 +1724,40 @@ mod caption_restructure_tests {
         let (table_id, caption_id) = collect_caption_tables(&doc)[0];
         assert!(!display_is_none(&doc, caption_id));
         assert!(!display_is_none(&doc, table_id));
+    }
+
+    #[test]
+    fn visibility_is_hidden_detects_hidden_and_collapse_tables() {
+        for value in ["hidden", "collapse"] {
+            let mut doc = parse(
+                &format!(
+                    r#"<html><head><style>table {{ visibility: {value}; }}</style></head>
+                       <body><table><caption>C</caption>
+                         <tbody><tr><td>x</td></tr></tbody></table></body></html>"#
+                ),
+                600.0,
+                &[],
+            );
+            resolve(&mut doc);
+            let (table_id, _caption_id) = collect_caption_tables(&doc)[0];
+            assert!(
+                visibility_is_hidden(&doc, table_id),
+                "visibility: {value} must count as hidden"
+            );
+        }
+    }
+
+    #[test]
+    fn visibility_is_hidden_false_for_visible_table() {
+        let mut doc = parse(
+            r#"<html><body><table><caption>C</caption>
+                 <tbody><tr><td>x</td></tr></tbody></table></body></html>"#,
+            600.0,
+            &[],
+        );
+        resolve(&mut doc);
+        let (table_id, _caption_id) = collect_caption_tables(&doc)[0];
+        assert!(!visibility_is_hidden(&doc, table_id));
     }
 
     #[test]
