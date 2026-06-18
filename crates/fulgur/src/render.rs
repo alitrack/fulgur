@@ -5998,4 +5998,209 @@ mod tests {
         );
         assert!(pdf.starts_with(b"%PDF"));
     }
+
+    // --- draw_under_transform: nested and compound cases ---
+
+    #[test]
+    fn render_smoke_nested_transforms() {
+        // Exercises the recursive draw_under_transform call in
+        // draw_under_transform's descendant loop (branch: desc_tx is Some).
+        // The outer rotate transform has the inner scale div as a descendant
+        // with its own TransformEntry, triggering the nested recursion.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="transform:rotate(10deg);background:#cef;
+                        width:80px;height:40px">
+              <div style="transform:scale(0.8);background:#fee;
+                          width:60px;height:30px">
+                <p>Nested transform text</p>
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_transform_wrapping_overflow_hidden() {
+        // Exercises draw_under_clip called from draw_under_transform's
+        // descendant loop when a clip block sits inside a transform wrapper.
+        // Without this, transforms wrapping clipping blocks silently drop
+        // the clip boundary (PR #309 follow-up).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="transform:rotate(5deg)">
+              <div style="width:80px;height:40px;overflow:hidden;background:#cef">
+                <div style="width:300px;height:20px;background:#f99">
+                  clipped inside transform
+                </div>
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_transform_wrapping_opacity_block() {
+        // Exercises draw_under_opacity called from draw_under_transform's
+        // descendant loop when an opacity-scoped block sits inside a transform.
+        let pdf = render_html(
+            r##"<!doctype html><html><body>
+            <div style="transform:rotate(5deg)">
+              <div style="opacity:0.5">
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+                  <rect x="0" y="0" width="40" height="40" fill="#37f"/>
+                </svg>
+              </div>
+            </div>
+            </body></html>"##,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_under_clip: transform and opacity descendants ---
+
+    #[test]
+    fn render_smoke_transform_inside_overflow_hidden() {
+        // Exercises draw_under_transform called from draw_under_clip's
+        // descendant loop (branch: desc_tx is Some for a clip_descendant).
+        // Without this, a transform inside overflow:hidden would lose its
+        // matrix (PR #310 Devin).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:120px;height:90px;overflow:hidden;background:#def">
+              <div style="transform:rotate(10deg);background:#fdc;
+                          width:60px;height:40px">
+                Rotated inside clipped area
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_under_opacity: transform and clip descendants ---
+
+    #[test]
+    fn render_smoke_transform_inside_opacity_scope() {
+        // Exercises draw_under_transform called from draw_under_opacity's
+        // descendant loop when a transform node sits inside an opacity-scoped
+        // block. Without this the inner transform matrix is dropped.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="opacity:0.6">
+              <div style="transform:rotate(8deg);background:#fee;
+                          width:80px;height:40px">
+                Rotated inside opacity group
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_overflow_hidden_inside_opacity_scope() {
+        // Exercises draw_under_clip called from draw_under_opacity's
+        // descendant loop when an overflow:hidden block sits inside an
+        // opacity-scoped parent. Without this, the clip boundary is lost.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="opacity:0.7">
+              <div style="width:80px;height:40px;overflow:hidden;background:#cef">
+                <div style="width:300px;height:20px;background:#f99">
+                  clipped inside opacity scope
+                </div>
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_under_clip / draw_under_opacity: is_split multi-page paths ---
+
+    #[test]
+    fn render_smoke_tall_overflow_hidden_multi_page() {
+        // Exercises the is_split height fix inside draw_under_clip (the
+        // overflow:hidden block spans multiple pages so frag.height is used
+        // instead of layout_size.height for the clip rect and bg/border).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="height:1400px;overflow:hidden;background:#def;
+                        border:2px solid #88c">
+              <p>Content inside tall overflow-hidden block spanning multiple pages.</p>
+              <p>Second paragraph inside the clipped region.</p>
+            </div>
+            <p>Below the clipped block.</p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_tall_opacity_block_multi_page() {
+        // Exercises the is_split height fix inside draw_under_opacity (the
+        // opacity-scoped block spans multiple pages so frag.height is used
+        // instead of layout_size.height for the bg/border per-page slice).
+        let pdf = render_html(
+            r##"<!doctype html><html><body>
+            <div style="opacity:0.7">
+              <div style="height:1400px;background:#fee;border:2px solid orange">
+                <p>Content inside a tall opacity-scoped block crossing pages.</p>
+                <svg xmlns="http://www.w3.org/2000/svg" width="80" height="60">
+                  <rect x="5" y="5" width="70" height="50" fill="#e74"/>
+                </svg>
+              </div>
+            </div>
+            <p>Below the opacity block.</p>
+            </body></html>"##,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_under_opacity: block with shared inline-root paragraph ---
+
+    #[test]
+    fn render_smoke_opacity_scope_with_inline_paragraph() {
+        // Exercises the para_for_block path inside draw_under_opacity's body:
+        // a styled <p> with opacity < 1.0 and background is both a block
+        // (block_styles entry) and an inline root (paragraphs entry sharing
+        // the same node_id). An inline-block child (<span>) registers an
+        // InlineBoxItem which goes into opacity_descendants, triggering the
+        // draw_under_opacity path. The para_for_block branch then paints the
+        // paragraph inside the opacity wrap alongside the block's bg/border.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <p style="opacity:0.7;background:#fee;padding:8px">
+              <span style="display:inline-block;width:24px;height:24px;
+                           background:#f44;vertical-align:middle"></span>
+              Text with opacity and inline-block sibling.
+            </p>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_under_clip / dispatch_fragment: SVG as clip descendant ---
+
+    #[test]
+    fn render_smoke_svg_inside_overflow_hidden() {
+        // Exercises the dispatch_fragment SVG arm when an <svg> is a strict
+        // clip_descendant of an overflow:hidden block. The SVG node itself is
+        // NOT overflow:hidden and has no transform, so it hits the final
+        // `else { dispatch_fragment(...) }` branch in draw_under_clip's
+        // descendant loop, which then routes to `draw_svg_v2`.
+        let pdf = render_html(
+            r##"<!doctype html><html><body>
+            <div style="width:80px;height:60px;overflow:hidden;background:#cef">
+              <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+                <circle cx="100" cy="100" r="80" fill="#e74"/>
+              </svg>
+            </div>
+            </body></html>"##,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
 }
