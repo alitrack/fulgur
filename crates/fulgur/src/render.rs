@@ -5998,4 +5998,132 @@ mod tests {
         );
         assert!(pdf.starts_with(b"%PDF"));
     }
+
+    // --- draw_under_opacity main loop dispatch (lines ~645-665) ---
+
+    #[test]
+    fn render_smoke_opacity_block_with_block_child() {
+        // A div with opacity < 1 containing a block-level child div populates
+        // opacity_descendants (via collect_drawables_node_ids on the inner div's
+        // block_styles entry) and triggers draw_under_opacity from the main loop.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="opacity:0.5;background:#eef;padding:8px">
+              <div style="background:#9cf;height:30px;width:100px">child block</div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- multicol column-rule painting (lines ~700-715) ---
+
+    #[test]
+    fn render_smoke_multicol_with_column_rule() {
+        // column-rule CSS populates drawables.multicol_rules so the post-pass
+        // paint_multicol_rule_for_page fires (lines ~700-715).
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:2;column-gap:20px;column-rule:2px solid #999;width:400px">
+              <p>Alpha beta gamma delta epsilon zeta eta theta iota kappa.</p>
+              <p>Lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- transform inside draw_under_clip descriptor loop (lines ~1847-1862) ---
+
+    #[test]
+    fn render_smoke_transform_inside_overflow_hidden() {
+        // A block with overflow:hidden containing a transformed child triggers
+        // draw_under_transform from inside draw_under_clip's descriptor loop.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="width:120px;height:80px;overflow:hidden;background:#eef">
+              <div style="width:60px;height:40px;background:#9cf;transform:rotate(15deg)">
+                rotated inside clip
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_under_transform inside draw_under_opacity (lines ~2191-2205) ---
+
+    #[test]
+    fn render_smoke_opacity_block_with_transform_child() {
+        // Opacity block whose child has a CSS transform exercises
+        // draw_under_transform called from inside draw_under_opacity.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="opacity:0.5">
+              <div style="width:60px;height:40px;background:#9cf;transform:rotate(10deg)">
+                rotated under opacity
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_under_clip inside draw_under_opacity (lines ~2211-2242) ---
+
+    #[test]
+    fn render_smoke_opacity_block_with_clip_child() {
+        // Opacity block containing an overflow:hidden child exercises
+        // draw_under_clip from inside draw_under_opacity.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="opacity:0.5">
+              <div style="width:80px;height:40px;overflow:hidden;background:#9cf">
+                <div style="width:200px;height:20px;background:#f99">clipped child</div>
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- nested draw_under_opacity (lines ~2244-2275) ---
+
+    #[test]
+    fn render_smoke_nested_opacity_blocks() {
+        // Outer opacity block containing another opacity block exercises the
+        // nested draw_under_opacity path.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="opacity:0.5">
+              <div style="opacity:0.7;background:#9cf">
+                <div style="height:20px;background:#6ac">inner content</div>
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- use_run_tagging path in dispatch_fragment (lines ~1044-1086) ---
+
+    #[test]
+    fn render_smoke_tagged_link_in_styled_block() {
+        // A tagged PDF with a link inside a styled paragraph (which has both
+        // block_styles and paragraphs entries) triggers use_run_tagging=true
+        // in dispatch_fragment.
+        let pdf = crate::engine::Engine::builder()
+            .tagged(true)
+            .lang("en")
+            .build()
+            .render_html(
+                r#"<!doctype html><html><body>
+                <p style="background:#fee;border:1px solid #c88;padding:4px">
+                  See <a href="https://example.com">example.com</a> for details.
+                </p>
+                </body></html>"#,
+            )
+            .expect("tagged render");
+        assert!(pdf.starts_with(b"%PDF"));
+    }
 }
