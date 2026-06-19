@@ -40,12 +40,27 @@ local font / CSS / image assets served alongside it.
 Requires [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/).
 
 ```bash
-wasm-pack build crates/fulgur-wasm --target web --dev \
-  --out-dir ../../examples/wasm-demo/pkg
+# Size-optimised build (~7 MB). Wraps the CARGO_PROFILE_RELEASE_* overrides
+# and wasm-opt flags; see mise.toml.
+mise run wasm-build
 ```
 
 This populates `examples/wasm-demo/pkg/` with `fulgur_wasm.js`,
 `fulgur_wasm_bg.wasm`, and TypeScript declarations.
+
+If you don't use mise, run the underlying command from the repo root:
+
+```bash
+CARGO_PROFILE_RELEASE_OPT_LEVEL=z \
+CARGO_PROFILE_RELEASE_PANIC=abort \
+CARGO_PROFILE_RELEASE_LTO=fat \
+CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+CARGO_PROFILE_RELEASE_STRIP=true \
+wasm-pack build crates/fulgur-wasm --target web --release \
+  --out-dir ../../examples/wasm-demo/pkg
+```
+
+For a quick iteration build (no size tuning, ~37 MB), use `--dev` instead.
 
 ## Run
 
@@ -66,10 +81,14 @@ pdf.js. (No file download — see notes below if you need bytes.)
 
 ## Notes
 
-- `--dev` builds produce a ~37 MB `.wasm`. `wasm-pack build … --release` (no
-  flag = release) shrinks it but currently still ships every fulgur dependency.
-  Aggressive size reduction (`wasm-opt`, dead-code analysis) is part of the
-  later B-3 / scope C work.
+- Bundle sizes: `--dev` ≈ 37 MB and the size-optimised `mise run wasm-build`
+  ≈ 7 MB (≈ 2.8 MB gzipped). The size-optimised build adds `opt-level=z` /
+  `lto=fat` / `panic=abort` (via per-build `CARGO_PROFILE_RELEASE_*` env vars,
+  so the CLI's native release profile is untouched) on top of the
+  `wasm-opt -Oz` that the Cargo metadata applies to every `--release` build. A
+  plain `wasm-pack build --release` (no env vars) keeps `opt-level=3` and lands
+  between the two. Further dead-code analysis / feature-gating (dropping SVG or
+  system-font fallback) is tracked in `fulgur-0xuy`.
 - The first call after page load incurs a one-time WASM compile cost on top
   of the render itself; subsequent calls reuse the instance.
 - WOFF2 payloads work too — `Engine.add_font` decodes them in-process via

@@ -33,6 +33,27 @@ for dir in examples/*/; do
 done
 """
 
+[tasks.wasm-build]
+description = "Build the size-optimised fulgur-wasm bundle into examples/wasm-demo/pkg"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+# Size-optimised WASM build (~7 MB vs ~11 MB for a plain --release and ~37 MB
+# for --dev). The CARGO_PROFILE_RELEASE_* env vars override the shared release
+# profile for THIS invocation only, so the CLI's native release tuning is never
+# touched (cargo reads these env vars; the wasm-opt flags live in
+# crates/fulgur-wasm/Cargo.toml under [package.metadata.wasm-pack.profile.release]).
+# panic=abort is safe here: fulgur-wasm returns errors via Result<_, JsError>
+# and uses no catch_unwind, and wasm32-unknown-unknown cannot unwind anyway.
+export CARGO_PROFILE_RELEASE_OPT_LEVEL=z
+export CARGO_PROFILE_RELEASE_PANIC=abort
+export CARGO_PROFILE_RELEASE_LTO=fat
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+export CARGO_PROFILE_RELEASE_STRIP=true
+wasm-pack build crates/fulgur-wasm --target web --release \\
+  --out-dir ../../examples/wasm-demo/pkg
+"""
+
 [tasks."wpt:fetch"]
 description = "Fetch WPT sources into target/wpt/ (pinned SHA)"
 run = "scripts/wpt/fetch.sh"

@@ -12,6 +12,18 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# wasm-opt flags applied by `wasm-pack build --release`. `-Oz` optimises
+# aggressively for size (over speed). The `--enable-*` flags re-declare the
+# WebAssembly features that rustc emits when the release profile is overridden
+# to opt-level="z"/strip=true (those emit `memory.copy`/`memory.fill` and drop
+# the `target_features` section); the bundled binaryen (v117) otherwise rejects
+# them with a "Bulk memory operations require bulk memory" validator error.
+# The size-optimised rustc knobs are passed per-build as CARGO_PROFILE_RELEASE_*
+# env vars (see the mise `wasm-build` task) so the CLI's native release profile
+# keeps its speed-first tuning untouched.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ['-Oz', '--enable-bulk-memory', '--enable-mutable-globals', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-reference-types']
+
 [dependencies]
 fulgur = { path = "../fulgur" }
 wasm-bindgen = "0.2"
