@@ -4840,7 +4840,7 @@ mod repeating_stops_tests {
         assert!(out.last().unwrap().0 >= 1.0);
         // Copies are spaced by period=0.3
         let first_pos = out.first().unwrap().0;
-        let second_pos = out.iter().nth(1).unwrap().0;
+        let second_pos = out.get(1).unwrap().0;
         let step = second_pos - first_pos;
         assert!(
             (step - 0.3).abs() < 1e-5,
