@@ -4504,4 +4504,998 @@ mod additional_conic_and_grid_tests {
         assert_eq!(start, 0.0);
         assert!((end - 40.0).abs() < 1e-5);
     }
+
+    // ─── try_uniform_grid: non-uniform y step rejection ──────────────────────
+
+    #[test]
+    fn non_uniform_y_step_rejects_irregular_grid() {
+        // 2 x-values × 3 y-values = 6 tiles; x-steps are uniform but y-steps are not.
+        // try_uniform_grid must return None because the y-step uniformity check fails.
+        let tiles = vec![
+            (0.0_f32, 0.0_f32, 5.0_f32, 5.0_f32),
+            (10.0, 0.0, 5.0, 5.0),
+            (0.0, 10.0, 5.0, 5.0),
+            (10.0, 10.0, 5.0, 5.0),
+            (0.0, 25.0, 5.0, 5.0), // y-step jumps from 10 to 15 → non-uniform
+            (10.0, 25.0, 5.0, 5.0),
+        ];
+        assert!(
+            try_uniform_grid(&tiles).is_none(),
+            "non-uniform y steps must be rejected"
+        );
+    }
+
+    #[test]
+    fn non_uniform_x_step_rejects_irregular_grid() {
+        // 3 x-values × 2 y-values = 6 tiles; x-steps are NOT uniform.
+        let tiles = vec![
+            (0.0_f32, 0.0_f32, 5.0_f32, 5.0_f32),
+            (10.0, 0.0, 5.0, 5.0),
+            (25.0, 0.0, 5.0, 5.0), // x-step jumps from 10 to 15
+            (0.0, 10.0, 5.0, 5.0),
+            (10.0, 10.0, 5.0, 5.0),
+            (25.0, 10.0, 5.0, 5.0),
+        ];
+        assert!(
+            try_uniform_grid(&tiles).is_none(),
+            "non-uniform x steps must be rejected"
+        );
+    }
+}
+
+// ─── renormalize_stops_to_unit_range ─────────────────────────────────────────
+
+#[cfg(test)]
+mod renormalize_tests {
+    use super::renormalize_stops_to_unit_range;
+
+    fn red() -> [u8; 4] {
+        [255, 0, 0, 255]
+    }
+    fn blue() -> [u8; 4] {
+        [0, 0, 255, 255]
+    }
+    fn green() -> [u8; 4] {
+        [0, 255, 0, 255]
+    }
+
+    #[test]
+    fn already_in_range_passthrough() {
+        let stops = vec![(0.0, red()), (0.5, green()), (1.0, blue())];
+        let out = renormalize_stops_to_unit_range(stops.clone());
+        assert_eq!(out, stops);
+    }
+
+    #[test]
+    fn stops_shifted_right_of_one_get_endpoint_prepended() {
+        // All stops > 1 → a synthetic stop at 0.0 and at 1.0 are added;
+        // stops that are outside [0,1] are dropped.
+        let stops = vec![(1.2, red()), (1.8, blue())];
+        let out = renormalize_stops_to_unit_range(stops);
+        // First stop synthesized at 0.0 (clamped to first color)
+        assert_eq!(out[0].0, 0.0);
+        // Last synthetic stop at 1.0 (between red and blue interpolated)
+        assert_eq!(out.last().unwrap().0, 1.0);
+    }
+
+    #[test]
+    fn stops_shifted_left_of_zero_get_endpoint_appended() {
+        // All stops < 0 → synthetic stops added at 0.0 and 1.0; the out-of-range
+        // stops are dropped so the result covers exactly [0, 1].
+        let stops = vec![(-0.8, red()), (-0.2, blue())];
+        let out = renormalize_stops_to_unit_range(stops);
+        assert_eq!(out[0].0, 0.0);
+        assert_eq!(out.last().unwrap().0, 1.0);
+    }
+
+    #[test]
+    fn stops_partially_outside_range_only_in_range_kept() {
+        // First stop at -0.5, then stops inside range, then one past 1.0.
+        // Synthetic endpoints at 0 and 1 fill the gaps; out-of-range stops are filtered.
+        let stops = vec![(-0.5, red()), (0.25, green()), (0.75, blue()), (1.5, red())];
+        let out = renormalize_stops_to_unit_range(stops);
+        // Must start at or before 0.0 and end at or after 1.0
+        assert!(out.first().unwrap().0 <= 0.0 + 1e-6);
+        assert!(out.last().unwrap().0 >= 1.0 - 1e-6);
+        // The in-range stops must be present
+        let has_025 = out.iter().any(|(p, _)| (*p - 0.25).abs() < 1e-6);
+        let has_075 = out.iter().any(|(p, _)| (*p - 0.75).abs() < 1e-6);
+        assert!(has_025, "0.25 stop must be preserved");
+        assert!(has_075, "0.75 stop must be preserved");
+    }
+
+    #[test]
+    fn stop_at_zero_already_present_no_duplicate() {
+        // If the first stop is exactly 0.0, no extra 0.0 endpoint is prepended
+        let stops = vec![(0.0, red()), (2.0, blue())];
+        let out = renormalize_stops_to_unit_range(stops);
+        let zeros: Vec<_> = out.iter().filter(|(p, _)| *p == 0.0).collect();
+        assert_eq!(zeros.len(), 1, "exactly one stop at 0.0");
+    }
+
+    #[test]
+    fn stop_at_one_already_present_no_duplicate() {
+        let stops = vec![(-1.0, red()), (1.0, blue())];
+        let out = renormalize_stops_to_unit_range(stops);
+        let ones: Vec<_> = out
+            .iter()
+            .filter(|(p, _)| (*p - 1.0).abs() < 1e-9)
+            .collect();
+        assert_eq!(ones.len(), 1, "exactly one stop at 1.0");
+    }
+
+    #[test]
+    fn in_range_stops_passthrough_unchanged() {
+        // Both stops are in [0, 1] → early-return passthrough, no synthesis
+        let stops = vec![(0.0, [0, 0, 0, 255]), (0.5, [200, 100, 50, 255])];
+        let out = renormalize_stops_to_unit_range(stops.clone());
+        assert_eq!(out, stops, "all-in-range input must be returned unchanged");
+    }
+
+    #[test]
+    fn synthetic_endpoint_at_one_interpolated_from_out_of_range_stop() {
+        // Last stop at 1.5 (outside range) → synthetic 1.0 endpoint added via interpolation;
+        // color_at(1.0) = lerp(black, white, 1/1.5 ≈ 0.667) ≈ [170, 170, 170, 255]
+        let stops = vec![(0.0, [0, 0, 0, 255]), (1.5, [255, 255, 255, 255])];
+        let out = renormalize_stops_to_unit_range(stops);
+        let last = out.last().unwrap();
+        assert!((last.0 - 1.0).abs() < 1e-6, "synthetic stop must be at 1.0");
+        // α = 1.0/1.5 ≈ 0.6667 → each channel ≈ 170
+        assert!(
+            last.1[0] > 160 && last.1[0] < 180,
+            "R channel ≈ 170, got {}",
+            last.1[0]
+        );
+    }
+
+    #[test]
+    fn coincident_stops_hard_transition_picks_later_color() {
+        // Two stops at identical positions (hard transition) inside range;
+        // renormalize adds a 0.0 and 1.0 endpoint. The hard stop at 0.5
+        // should survive intact (two entries at 0.5).
+        let stops = vec![(0.5, [255, 0, 0, 255]), (0.5, [0, 0, 255, 255])];
+        let out = renormalize_stops_to_unit_range(stops);
+        assert!(out.iter().any(|(p, _)| (*p - 0.5).abs() < 1e-9));
+        // Both hard-stop entries survive
+        assert_eq!(
+            out.iter().filter(|(p, _)| (*p - 0.5).abs() < 1e-9).count(),
+            2
+        );
+    }
+}
+
+// ─── expand_interpolation_hints ──────────────────────────────────────────────
+
+#[cfg(test)]
+mod interpolation_hint_tests {
+    use super::{ResolvedStop, expand_interpolation_hints};
+
+    fn make_stop(pos: f32, rgba: [u8; 4]) -> ResolvedStop {
+        ResolvedStop {
+            pos,
+            rgba,
+            is_hint: false,
+        }
+    }
+
+    fn make_hint(pos: f32) -> ResolvedStop {
+        ResolvedStop {
+            pos,
+            rgba: [0; 4],
+            is_hint: true,
+        }
+    }
+
+    #[test]
+    fn no_hints_passthrough() {
+        let stops = vec![
+            make_stop(0.0, [255, 0, 0, 255]),
+            make_stop(0.5, [0, 255, 0, 255]),
+            make_stop(1.0, [0, 0, 255, 255]),
+        ];
+        let out = expand_interpolation_hints(stops.clone());
+        assert_eq!(out.len(), 3);
+        assert!((out[0].0 - 0.0).abs() < 1e-6);
+        assert!((out[1].0 - 0.5).abs() < 1e-6);
+        assert!((out[2].0 - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hint_at_midpoint_produces_8_intermediate_stops() {
+        // midpoint hint at 0.5 between 0.0 and 1.0 → exponent=1 (linear, no-op)
+        // but 8 intermediate stops are still inserted
+        let stops = vec![
+            make_stop(0.0, [0, 0, 0, 255]),
+            make_hint(0.5),
+            make_stop(1.0, [200, 0, 0, 255]),
+        ];
+        let out = expand_interpolation_hints(stops);
+        // The two color stops survive; the hint is replaced by 8 intermediate stops
+        // (the hint itself disappears but its neighbour stops do too because the
+        // algorithm only emits non-hint stops directly, and then the 8 samples)
+        // Total = 1 (before hint) + 8 (samples) + 0 (hint itself) = 9, then +1 for last stop
+        // Actually: stop 0 emitted, hint replaced by 8 samples, stop 1 emitted → 10
+        assert_eq!(out.len(), 10, "2 color stops + 8 hint samples = 10");
+    }
+
+    #[test]
+    fn leading_hint_is_skipped() {
+        // i==0 is a leading hint: skip (defensive guard in code)
+        let stops = vec![
+            make_hint(0.0),
+            make_stop(0.5, [255, 0, 0, 255]),
+            make_stop(1.0, [0, 0, 255, 255]),
+        ];
+        let out = expand_interpolation_hints(stops);
+        // Leading hint is skipped; only the two color stops survive
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn trailing_hint_is_skipped() {
+        // i == stops.len()-1 is a trailing hint: skip
+        let stops = vec![
+            make_stop(0.0, [255, 0, 0, 255]),
+            make_stop(0.5, [0, 255, 0, 255]),
+            make_hint(1.0),
+        ];
+        let out = expand_interpolation_hints(stops);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn degenerate_span_hint_dropped() {
+        // When the two neighbouring colour stops are at the same position (span ≤ EPS)
+        // the hint is dropped without inserting any intermediate stops.
+        let stops = vec![
+            make_stop(0.5, [255, 0, 0, 255]),
+            make_hint(0.5),
+            make_stop(0.5, [0, 0, 255, 255]),
+        ];
+        let out = expand_interpolation_hints(stops);
+        // hint dropped → only the two surrounding stops
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn hint_biases_midpoint_toward_first_stop() {
+        // hint at 0.25 between 0.0 and 1.0 → exponent = ln(0.5)/ln(0.25) = 0.5
+        // So the midpoint t=0.5 maps to p=t^0.5=0.707, meaning colour is biased
+        // toward the start (darker for black→white).
+        let stops = vec![
+            make_stop(0.0, [0, 0, 0, 255]),
+            make_hint(0.25),
+            make_stop(1.0, [255, 255, 255, 255]),
+        ];
+        let out = expand_interpolation_hints(stops);
+        assert_eq!(out.len(), 10); // 1 + 8 + 1
+        // The first colour stop and last colour stop
+        assert_eq!(out[0], (0.0, [0, 0, 0, 255]));
+        assert_eq!(out[9], (1.0, [255, 255, 255, 255]));
+        // The 5th interpolated sample (t=5/9 ≈ 0.556, pos=0.556)
+        // p = t^exponent where exponent=ln(0.5)/ln(0.25)=0.5 → p=0.556^0.5≈0.745
+        // colour ≈ 0.745*255 ≈ 190
+        let sample_pos = out[5].0;
+        assert!(
+            sample_pos > 0.4 && sample_pos < 0.7,
+            "sample position {sample_pos} should be in (0.4, 0.7)"
+        );
+    }
+}
+
+// ─── expand_repeating_stops ──────────────────────────────────────────────────
+
+#[cfg(test)]
+mod repeating_stops_tests {
+    use super::expand_repeating_stops;
+
+    fn red() -> [u8; 4] {
+        [255, 0, 0, 255]
+    }
+    fn blue() -> [u8; 4] {
+        [0, 0, 255, 255]
+    }
+
+    #[test]
+    fn degenerate_zero_period_returns_solid() {
+        // first == last → period=0 → returns [0, last_color], [1, last_color]
+        let stops = vec![(0.5, red()), (0.5, blue())];
+        let out = expand_repeating_stops(stops).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], (0.0, blue()));
+        assert_eq!(out[1], (1.0, blue()));
+    }
+
+    #[test]
+    fn already_covers_zero_to_one() {
+        // period covers [0, 1] exactly; forward=0, backward=0, total_copies=1
+        let stops = vec![(0.0, red()), (1.0, blue())];
+        let out = expand_repeating_stops(stops.clone()).unwrap();
+        // Single copy shifted by 0 → same as input
+        assert_eq!(out, stops);
+    }
+
+    #[test]
+    fn short_period_expands_to_cover_range() {
+        // Period [0.2, 0.4]: period=0.2; needs backward to cover 0 and forward to cover 1
+        let stops = vec![(0.2, red()), (0.4, blue())];
+        let out = expand_repeating_stops(stops).unwrap();
+        // Output must cover at least [0, 1]
+        assert!(
+            out.first().unwrap().0 <= 0.0,
+            "first stop must reach or precede 0.0"
+        );
+        assert!(
+            out.last().unwrap().0 >= 1.0,
+            "last stop must reach or exceed 1.0"
+        );
+    }
+
+    #[test]
+    fn period_starts_after_zero_backward_copy_added() {
+        // Period [0.5, 0.8]: p_first=0.5 > 0 → backward copies needed
+        let stops = vec![(0.5, red()), (0.8, blue())];
+        let out = expand_repeating_stops(stops).unwrap();
+        assert!(out.first().unwrap().0 <= 0.0);
+        assert!(out.last().unwrap().0 >= 1.0);
+        // Copies are spaced by period=0.3
+        let first_pos = out.first().unwrap().0;
+        let second_pos = out.iter().nth(1).unwrap().0;
+        let step = second_pos - first_pos;
+        assert!(
+            (step - 0.3).abs() < 1e-5,
+            "step should be period 0.3, got {step}"
+        );
+    }
+
+    #[test]
+    fn period_ends_before_one_forward_copy_added() {
+        // Period [0.0, 0.3]: p_last=0.3 < 1 → forward copies needed
+        let stops = vec![(0.0, red()), (0.3, blue())];
+        let out = expand_repeating_stops(stops).unwrap();
+        assert!(out.first().unwrap().0 <= 0.0);
+        assert!(out.last().unwrap().0 >= 1.0);
+    }
+
+    #[test]
+    fn negative_period_returns_solid() {
+        // Monotonic clamp could produce negative period if positions are swapped;
+        // treated as degenerate → solid last color
+        let stops = vec![(0.8, red()), (0.2, blue())];
+        // After monotonic clamp both would be 0.8, but expand_repeating_stops
+        // gets the raw stops. period = 0.2 - 0.8 = -0.6 < 0 → solid.
+        let out = expand_repeating_stops(stops).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].1, blue()); // last_color
+        assert_eq!(out[1].1, blue());
+    }
+}
+
+// ─── resolve_gradient_size ───────────────────────────────────────────────────
+
+#[cfg(test)]
+mod gradient_size_tests {
+    use super::{BgLengthPercentage, BgSize, resolve_gradient_size};
+
+    #[test]
+    fn auto_returns_origin_size() {
+        assert_eq!(
+            resolve_gradient_size(&BgSize::Auto, 300.0, 200.0),
+            (300.0, 200.0)
+        );
+    }
+
+    #[test]
+    fn cover_returns_origin_size() {
+        assert_eq!(
+            resolve_gradient_size(&BgSize::Cover, 300.0, 200.0),
+            (300.0, 200.0)
+        );
+    }
+
+    #[test]
+    fn contain_returns_origin_size() {
+        assert_eq!(
+            resolve_gradient_size(&BgSize::Contain, 300.0, 200.0),
+            (300.0, 200.0)
+        );
+    }
+
+    #[test]
+    fn explicit_both_axes_resolved() {
+        let size = BgSize::Explicit(
+            Some(BgLengthPercentage::Length(80.0)),
+            Some(BgLengthPercentage::Length(60.0)),
+        );
+        assert_eq!(resolve_gradient_size(&size, 300.0, 200.0), (80.0, 60.0));
+    }
+
+    #[test]
+    fn explicit_width_only_height_falls_back_to_origin() {
+        let size = BgSize::Explicit(Some(BgLengthPercentage::Length(150.0)), None);
+        let (w, h) = resolve_gradient_size(&size, 300.0, 200.0);
+        assert_eq!(w, 150.0);
+        assert_eq!(h, 200.0); // None → origin_h
+    }
+
+    #[test]
+    fn explicit_height_only_width_falls_back_to_origin() {
+        let size = BgSize::Explicit(None, Some(BgLengthPercentage::Length(50.0)));
+        let (w, h) = resolve_gradient_size(&size, 300.0, 200.0);
+        assert_eq!(w, 300.0); // None → origin_w
+        assert_eq!(h, 50.0);
+    }
+
+    #[test]
+    fn explicit_both_none_returns_origin_size() {
+        let size = BgSize::Explicit(None, None);
+        assert_eq!(resolve_gradient_size(&size, 300.0, 200.0), (300.0, 200.0));
+    }
+
+    #[test]
+    fn explicit_percentage_resolved_against_origin() {
+        let size = BgSize::Explicit(
+            Some(BgLengthPercentage::Percentage(0.5)),
+            Some(BgLengthPercentage::Percentage(0.25)),
+        );
+        let (w, h) = resolve_gradient_size(&size, 400.0, 200.0);
+        assert!((w - 200.0).abs() < 1e-5);
+        assert!((h - 50.0).abs() < 1e-5);
+    }
+}
+
+// ─── compute_origin_rect / compute_clip_rect ─────────────────────────────────
+
+#[cfg(test)]
+mod rect_computation_tests {
+    use super::{BgBox, BgClip, BlockStyle, compute_clip_rect, compute_origin_rect};
+
+    fn style(border: [f32; 4], padding: [f32; 4]) -> BlockStyle {
+        BlockStyle {
+            border_widths: border,
+            padding,
+            ..BlockStyle::default()
+        }
+    }
+
+    // ─── compute_origin_rect ─────────────────────────────────────────────────
+
+    #[test]
+    fn origin_border_box_passthrough() {
+        let s = style([5.0; 4], [3.0; 4]);
+        assert_eq!(
+            compute_origin_rect(&s, &BgBox::BorderBox, 10.0, 20.0, 100.0, 80.0),
+            (10.0, 20.0, 100.0, 80.0)
+        );
+    }
+
+    #[test]
+    fn origin_padding_box_inset_by_border() {
+        // border: [top=2, right=3, bottom=4, left=5]
+        let s = style([2.0, 3.0, 4.0, 5.0], [0.0; 4]);
+        let (x, y, w, h) = compute_origin_rect(&s, &BgBox::PaddingBox, 0.0, 0.0, 100.0, 80.0);
+        assert_eq!(x, 5.0); // left border
+        assert_eq!(y, 2.0); // top border
+        assert_eq!(w, 92.0); // 100 - left(5) - right(3)
+        assert_eq!(h, 74.0); // 80 - top(2) - bottom(4)
+    }
+
+    #[test]
+    fn origin_content_box_inset_by_border_and_padding() {
+        // border: [2,3,4,5], padding: [1,2,3,4]
+        let s = style([2.0, 3.0, 4.0, 5.0], [1.0, 2.0, 3.0, 4.0]);
+        let (x, y, w, h) = compute_origin_rect(&s, &BgBox::ContentBox, 0.0, 0.0, 100.0, 80.0);
+        assert_eq!(x, 9.0); // left border(5) + left padding(4)
+        assert_eq!(y, 3.0); // top border(2) + top padding(1)
+        assert_eq!(w, 86.0); // 100 - left(5+4) - right(3+2)
+        assert_eq!(h, 70.0); // 80 - top(2+1) - bottom(4+3)
+    }
+
+    // ─── compute_clip_rect ───────────────────────────────────────────────────
+
+    #[test]
+    fn clip_border_box_passthrough() {
+        let s = style([5.0; 4], [3.0; 4]);
+        assert_eq!(
+            compute_clip_rect(&s, &BgClip::BorderBox, 10.0, 20.0, 100.0, 80.0),
+            (10.0, 20.0, 100.0, 80.0)
+        );
+    }
+
+    #[test]
+    fn clip_padding_box_inset_by_border() {
+        let s = style([2.0, 3.0, 4.0, 5.0], [0.0; 4]);
+        let (x, y, w, h) = compute_clip_rect(&s, &BgClip::PaddingBox, 0.0, 0.0, 100.0, 80.0);
+        assert_eq!(x, 5.0);
+        assert_eq!(y, 2.0);
+        assert_eq!(w, 92.0);
+        assert_eq!(h, 74.0);
+    }
+
+    #[test]
+    fn clip_text_same_as_padding_box() {
+        let s = style([2.0, 3.0, 4.0, 5.0], [0.0; 4]);
+        let padding = compute_clip_rect(&s, &BgClip::PaddingBox, 0.0, 0.0, 100.0, 80.0);
+        let text = compute_clip_rect(&s, &BgClip::Text, 0.0, 0.0, 100.0, 80.0);
+        assert_eq!(padding, text);
+    }
+
+    #[test]
+    fn clip_content_box_inset_by_border_and_padding() {
+        let s = style([2.0, 3.0, 4.0, 5.0], [1.0, 2.0, 3.0, 4.0]);
+        let (x, y, w, h) = compute_clip_rect(&s, &BgClip::ContentBox, 0.0, 0.0, 100.0, 80.0);
+        assert_eq!(x, 9.0);
+        assert_eq!(y, 3.0);
+        assert_eq!(w, 86.0);
+        assert_eq!(h, 70.0);
+    }
+}
+
+// ─── compute_inner_radii ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod inner_radii_tests {
+    use super::{BgClip, BlockStyle, compute_inner_radii};
+
+    fn style(border: [f32; 4], padding: [f32; 4]) -> BlockStyle {
+        BlockStyle {
+            border_widths: border,
+            padding,
+            ..BlockStyle::default()
+        }
+    }
+
+    #[test]
+    fn border_box_clip_no_inset() {
+        let s = style([5.0; 4], [3.0; 4]);
+        let outer = [[10.0, 10.0]; 4];
+        let inner = compute_inner_radii(&outer, &s, &BgClip::BorderBox);
+        assert_eq!(inner, outer);
+    }
+
+    #[test]
+    fn padding_box_inset_by_border() {
+        // border=[top=2, right=3, bottom=4, left=5], outer radii=10
+        // top-left: x-radius -= left(5) → 5, y-radius -= top(2) → 8
+        // top-right: x-radius -= right(3) → 7, y-radius -= top(2) → 8
+        let s = style([2.0, 3.0, 4.0, 5.0], [0.0; 4]);
+        let outer = [[10.0, 10.0]; 4];
+        let inner = compute_inner_radii(&outer, &s, &BgClip::PaddingBox);
+        assert_eq!(inner[0], [5.0, 8.0]); // top-left: x-=left(5), y-=top(2)
+        assert_eq!(inner[1], [7.0, 8.0]); // top-right: x-=right(3), y-=top(2)
+        assert_eq!(inner[2], [7.0, 6.0]); // bottom-right: x-=right(3), y-=bottom(4)
+        assert_eq!(inner[3], [5.0, 6.0]); // bottom-left: x-=left(5), y-=bottom(4)
+    }
+
+    #[test]
+    fn content_box_inset_by_border_and_padding() {
+        let s = style([2.0, 3.0, 4.0, 5.0], [1.0, 1.0, 1.0, 1.0]);
+        let outer = [[10.0, 10.0]; 4];
+        let inner = compute_inner_radii(&outer, &s, &BgClip::ContentBox);
+        // top-left: x-=left_border(5)+left_pad(1)=6 → 4, y-=top_border(2)+top_pad(1)=3 → 7
+        assert_eq!(inner[0], [4.0, 7.0]);
+    }
+
+    #[test]
+    fn radii_clamped_to_zero_when_inset_exceeds_radius() {
+        // Small outer radii, large borders → clamp to 0
+        let s = style([8.0; 4], [0.0; 4]);
+        let outer = [[5.0, 5.0]; 4];
+        let inner = compute_inner_radii(&outer, &s, &BgClip::PaddingBox);
+        for corner in &inner {
+            assert_eq!(*corner, [0.0, 0.0]);
+        }
+    }
+
+    #[test]
+    fn text_clip_same_as_padding_box() {
+        let s = style([3.0; 4], [2.0; 4]);
+        let outer = [[10.0, 10.0]; 4];
+        let padding = compute_inner_radii(&outer, &s, &BgClip::PaddingBox);
+        let text = compute_inner_radii(&outer, &s, &BgClip::Text);
+        assert_eq!(padding, text);
+    }
+}
+
+// ─── ellipse_corner_scale ────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod ellipse_corner_scale_tests {
+    use super::ellipse_corner_scale;
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn zero_rx_passthrough() {
+        let (rx, ry) = ellipse_corner_scale(50.0, 50.0, 0.0, 0.0, 100.0, 100.0, 0.0, 10.0, true);
+        assert_eq!(rx, 0.0);
+        assert_eq!(ry, 10.0);
+    }
+
+    #[test]
+    fn zero_ry_passthrough() {
+        let (rx, ry) = ellipse_corner_scale(50.0, 50.0, 0.0, 0.0, 100.0, 100.0, 10.0, 0.0, true);
+        assert_eq!(rx, 10.0);
+        assert_eq!(ry, 0.0);
+    }
+
+    #[test]
+    fn center_of_square_farthest_corner_is_corner_distance() {
+        // Center at (50, 50) in box (0,0)-(100,100), rx0=ry0=1
+        // All corners are at distance sqrt((50/1)^2 + (50/1)^2) = sqrt(5000) ≈ 70.7
+        // farthest → chosen=70.7, result=(70.7, 70.7)
+        let (rx, ry) = ellipse_corner_scale(50.0, 50.0, 0.0, 0.0, 100.0, 100.0, 1.0, 1.0, true);
+        let expected = (50.0_f32.powi(2) * 2.0).sqrt();
+        assert!(approx(rx, expected), "rx={rx}, expected≈{expected}");
+        assert!(approx(ry, expected));
+    }
+
+    #[test]
+    fn center_of_square_closest_corner_is_zero() {
+        // Center exactly at a corner: (0,0), box (0,0)-(100,100)
+        // Corners: (0,0) distance=0, (100,0), (0,100), (100,100)
+        // closest = 0
+        let (rx, ry) = ellipse_corner_scale(0.0, 0.0, 0.0, 0.0, 100.0, 100.0, 1.0, 1.0, false);
+        assert!(approx(rx, 0.0), "rx={rx}");
+        assert!(approx(ry, 0.0), "ry={ry}");
+    }
+
+    #[test]
+    fn asymmetric_ellipse_farthest_scales_proportionally() {
+        // rx0=2, ry0=1; the scale factor is the same for both axes (it's a scalar multiple)
+        let (rx, ry) = ellipse_corner_scale(50.0, 50.0, 0.0, 0.0, 100.0, 100.0, 2.0, 1.0, true);
+        // The ratio rx/ry must equal rx0/ry0 = 2
+        let ratio = rx / ry;
+        assert!(approx(ratio, 2.0), "ratio={ratio}, expected 2.0");
+    }
+}
+
+// ─── compute_tile_positions / compute_tile_positions_slow ────────────────────
+
+#[cfg(test)]
+mod tile_position_tests {
+    use super::{BgRepeat, compute_tile_positions, compute_tile_positions_slow};
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    // ─── NoRepeat × NoRepeat fast-path ───────────────────────────────────────
+
+    #[test]
+    fn no_repeat_both_axes_returns_single_tile() {
+        let tiles = compute_tile_positions(
+            BgRepeat::NoRepeat,
+            BgRepeat::NoRepeat,
+            10.0,
+            20.0,
+            50.0,
+            40.0,
+            0.0,
+            0.0,
+            200.0,
+            200.0,
+        );
+        assert_eq!(tiles, vec![(10.0, 20.0, 50.0, 40.0)]);
+    }
+
+    #[test]
+    fn no_repeat_zero_image_size_returns_empty() {
+        let tiles = compute_tile_positions(
+            BgRepeat::NoRepeat,
+            BgRepeat::NoRepeat,
+            0.0,
+            0.0,
+            0.0,
+            30.0,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        );
+        assert!(tiles.is_empty());
+    }
+
+    // ─── Repeat × Repeat ─────────────────────────────────────────────────────
+
+    #[test]
+    fn repeat_tiles_cover_entire_clip_region() {
+        // Image 20×20 in 100×100 clip, starting at (0,0).
+        // The slow-path loop uses `tx < end + 0.01` so boundary tiles at x=100 are
+        // also emitted; 6 columns × 6 rows = 36 tiles (0,20,40,60,80,100).
+        let tiles = compute_tile_positions(
+            BgRepeat::Repeat,
+            BgRepeat::Repeat,
+            0.0,
+            0.0,
+            20.0,
+            20.0,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        );
+        // All tiles are 20×20
+        assert!(tiles.iter().all(|t| approx(t.2, 20.0) && approx(t.3, 20.0)));
+        // Tiles must span from ≤0 to ≥100 in both axes
+        let min_x = tiles.iter().map(|t| t.0).fold(f32::INFINITY, f32::min);
+        let max_x = tiles.iter().map(|t| t.0 + t.2).fold(0.0_f32, f32::max);
+        assert!(min_x <= 0.0, "left edge should cover 0");
+        assert!(max_x >= 100.0, "right edge should reach 100");
+        // Count is deterministic (boundary tiles included via +0.01 tolerance)
+        assert_eq!(
+            tiles.len(),
+            36,
+            "6 cols × 6 rows = 36 with boundary tolerance"
+        );
+    }
+
+    #[test]
+    fn repeat_with_offset_position_aligns_to_position() {
+        // Image 30px at position 15px: tiles at -15, 15, 45, 75, then 105 (outside)
+        // clip [0, 100], img 30, pos 15 → start = 15 - 30 = -15
+        let tiles = compute_tile_positions(
+            BgRepeat::Repeat,
+            BgRepeat::NoRepeat,
+            15.0,
+            0.0,
+            30.0,
+            100.0,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        );
+        let xs: Vec<f32> = tiles.iter().map(|t| t.0).collect();
+        // Should include tile at -15 and at 15
+        assert!(
+            xs.iter().any(|&x| approx(x, -15.0)),
+            "tile at -15 expected, got {xs:?}"
+        );
+        assert!(
+            xs.iter().any(|&x| approx(x, 15.0)),
+            "tile at 15 expected, got {xs:?}"
+        );
+    }
+
+    // ─── Slow path ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn slow_path_no_repeat_single_tile() {
+        let tiles = compute_tile_positions_slow(
+            BgRepeat::NoRepeat,
+            BgRepeat::NoRepeat,
+            10.0,
+            20.0,
+            50.0,
+            40.0,
+            0.0,
+            0.0,
+            200.0,
+            200.0,
+        );
+        assert_eq!(tiles.len(), 1);
+        assert_eq!(tiles[0], (10.0, 20.0, 50.0, 40.0));
+    }
+
+    #[test]
+    fn slow_path_degenerate_zero_tile_size_returns_empty() {
+        // resolve_repeat_axis with image_size=0 returns (0, ...) → tile_w=0 → empty
+        let tiles = compute_tile_positions_slow(
+            BgRepeat::Repeat,
+            BgRepeat::Repeat,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        );
+        assert!(tiles.is_empty());
+    }
+
+    #[test]
+    fn slow_path_repeat_matches_fast_path() {
+        // Both paths must agree on tile list for a simple repeat case
+        let fast = compute_tile_positions(
+            BgRepeat::Repeat,
+            BgRepeat::Repeat,
+            0.0,
+            0.0,
+            25.0,
+            25.0,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        );
+        let slow = compute_tile_positions_slow(
+            BgRepeat::Repeat,
+            BgRepeat::Repeat,
+            0.0,
+            0.0,
+            25.0,
+            25.0,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        );
+        assert_eq!(fast.len(), slow.len());
+        for (f, s) in fast.iter().zip(slow.iter()) {
+            assert!(
+                approx(f.0, s.0) && approx(f.1, s.1),
+                "tile mismatch: {f:?} vs {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn space_repeat_tiles_at_clip_boundaries() {
+        // Space repeat: tiles at clip_start and spaced evenly
+        let tiles = compute_tile_positions(
+            BgRepeat::Space,
+            BgRepeat::NoRepeat,
+            0.0,
+            0.0,
+            30.0,
+            100.0,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        );
+        // 3 tiles of 30px fit in 100px with 5px spacing each
+        assert_eq!(tiles.len(), 3);
+        assert!(approx(tiles[0].0, 0.0));
+        assert!(approx(tiles[1].0, 35.0)); // 30 + 5 spacing
+        assert!(approx(tiles[2].0, 70.0));
+    }
+
+    // ─── resolve_gradient_stops via public helper ─────────────────────────────
+
+    #[test]
+    fn resolve_gradient_stops_fraction_positions_basic() {
+        use super::resolve_gradient_stops;
+        use crate::draw_primitives::{GradientStop, GradientStopPosition};
+
+        let stops = vec![
+            GradientStop {
+                position: GradientStopPosition::Fraction(0.0),
+                rgba: [255, 0, 0, 255],
+                is_hint: false,
+            },
+            GradientStop {
+                position: GradientStopPosition::Fraction(1.0),
+                rgba: [0, 0, 255, 255],
+                is_hint: false,
+            },
+        ];
+        let out = resolve_gradient_stops(&stops, 100.0, false).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].offset, krilla::num::NormalizedF32::ZERO);
+        assert_eq!(out[1].offset, krilla::num::NormalizedF32::ONE);
+    }
+
+    #[test]
+    fn resolve_gradient_stops_single_stop_returns_none() {
+        use super::resolve_gradient_stops;
+        use crate::draw_primitives::{GradientStop, GradientStopPosition};
+
+        let stops = vec![GradientStop {
+            position: GradientStopPosition::Fraction(0.5),
+            rgba: [255, 0, 0, 255],
+            is_hint: false,
+        }];
+        assert!(resolve_gradient_stops(&stops, 100.0, false).is_none());
+    }
+
+    #[test]
+    fn resolve_gradient_stops_zero_line_length_returns_none() {
+        use super::resolve_gradient_stops;
+        use crate::draw_primitives::{GradientStop, GradientStopPosition};
+
+        let stops = vec![
+            GradientStop {
+                position: GradientStopPosition::Fraction(0.0),
+                rgba: [255, 0, 0, 255],
+                is_hint: false,
+            },
+            GradientStop {
+                position: GradientStopPosition::Fraction(1.0),
+                rgba: [0, 0, 255, 255],
+                is_hint: false,
+            },
+        ];
+        assert!(resolve_gradient_stops(&stops, 0.0, false).is_none());
+    }
+
+    #[test]
+    fn resolve_gradient_stops_length_px_converted_to_fraction() {
+        use super::resolve_gradient_stops;
+        use crate::draw_primitives::{GradientStop, GradientStopPosition};
+
+        // LengthPx(50) with line_length=100 → fraction 0.5
+        let stops = vec![
+            GradientStop {
+                position: GradientStopPosition::Fraction(0.0),
+                rgba: [255, 0, 0, 255],
+                is_hint: false,
+            },
+            GradientStop {
+                position: GradientStopPosition::LengthPx(50.0),
+                rgba: [0, 255, 0, 255],
+                is_hint: false,
+            },
+            GradientStop {
+                position: GradientStopPosition::Fraction(1.0),
+                rgba: [0, 0, 255, 255],
+                is_hint: false,
+            },
+        ];
+        let out = resolve_gradient_stops(&stops, 100.0, false).unwrap();
+        assert_eq!(out.len(), 3);
+        let mid_offset = out[1].offset.get();
+        assert!((mid_offset - 0.5).abs() < 1e-5, "mid offset={mid_offset}");
+    }
+
+    #[test]
+    fn resolve_gradient_stops_auto_positions_interpolated() {
+        use super::resolve_gradient_stops;
+        use crate::draw_primitives::{GradientStop, GradientStopPosition};
+
+        // Three auto stops → 0.0, 0.5, 1.0
+        let stops = vec![
+            GradientStop {
+                position: GradientStopPosition::Auto,
+                rgba: [255, 0, 0, 255],
+                is_hint: false,
+            },
+            GradientStop {
+                position: GradientStopPosition::Auto,
+                rgba: [0, 255, 0, 255],
+                is_hint: false,
+            },
+            GradientStop {
+                position: GradientStopPosition::Auto,
+                rgba: [0, 0, 255, 255],
+                is_hint: false,
+            },
+        ];
+        let out = resolve_gradient_stops(&stops, 100.0, false).unwrap();
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].offset, krilla::num::NormalizedF32::ZERO);
+        let mid = out[1].offset.get();
+        assert!((mid - 0.5).abs() < 1e-5, "mid={mid}");
+        assert_eq!(out[2].offset, krilla::num::NormalizedF32::ONE);
+    }
+
+    #[test]
+    fn resolve_gradient_stops_repeating_expands_stops() {
+        use super::resolve_gradient_stops;
+        use crate::draw_primitives::{GradientStop, GradientStopPosition};
+
+        // Period [0.0, 0.3] repeating → expands to cover [0, 1]
+        let stops = vec![
+            GradientStop {
+                position: GradientStopPosition::Fraction(0.0),
+                rgba: [255, 0, 0, 255],
+                is_hint: false,
+            },
+            GradientStop {
+                position: GradientStopPosition::Fraction(0.3),
+                rgba: [0, 0, 255, 255],
+                is_hint: false,
+            },
+        ];
+        let out = resolve_gradient_stops(&stops, 100.0, true).unwrap();
+        // repeating expands: many copies needed to cover [0, 1]
+        assert!(out.len() > 2, "repeating should expand beyond 2 stops");
+        assert_eq!(out[0].offset, krilla::num::NormalizedF32::ZERO);
+        assert_eq!(out.last().unwrap().offset, krilla::num::NormalizedF32::ONE);
+    }
 }
