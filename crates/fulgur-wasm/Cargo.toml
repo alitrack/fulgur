@@ -22,7 +22,7 @@ crate-type = ["cdylib", "rlib"]
 # env vars (see the mise `wasm-build` task) so the CLI's native release profile
 # keeps its speed-first tuning untouched.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ['-Oz', '--enable-bulk-memory', '--enable-mutable-globals', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-reference-types']
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-sign-ext", "--enable-reference-types"]
 
 [dependencies]
 fulgur = { path = "../fulgur" }
