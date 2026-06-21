@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use regex::Regex;
 use fulgur::asset::AssetBundle;
 use fulgur::config::{Margin, PageSize};
 use fulgur::engine::Engine;
@@ -329,6 +330,87 @@ fn parse_margin(s: &str) -> Margin {
     }
 }
 
+/// Process LaTeX math expressions in HTML, rendering them to KaTeX HTML+MathML.
+///
+/// Finds `$$...$$` (display math) and `$...$` (inline math), renders each with
+/// katex-rs, and replaces the delimiters with rendered HTML. Also injects
+/// minimal KaTeX CSS for correct display-mode layout.
+///
+/// Returns the number of expressions rendered, or an error on parse failure.
+fn process_math(html: &mut String) -> Result<usize, String> {
+    use katex::{render_to_string, KatexContext, Settings};
+
+    // Strategy: replace escaped \$ with a placeholder to avoid false
+    // matches, then process $$...$$ and $...$ with simple regex, then
+    // restore escaped dollars. This avoids look-behind which the regex
+    // crate doesn't support and fancy-regex backtracks on large docs.
+    const ESCAPED_PLACEHOLDER: &str = "\x00KATEX_ESC_DOLLAR\x00";
+    *html = html.replace("\\$", ESCAPED_PLACEHOLDER);
+
+    let display_re =
+        Regex::new(r"\$\$(.+?)\$\$").map_err(|e| format!("regex: {e}"))?;
+    let inline_re =
+        Regex::new(r"\$([^$]+?)\$").map_err(|e| format!("regex: {e}"))?;
+
+    let ctx = KatexContext::default();
+    let inline_settings = Settings::default();
+    let mut display_settings = Settings::default();
+    display_settings.display_mode = true;
+
+    let mut count = 0usize;
+
+    // Process display math first ($$...$$) to avoid conflict with inline $.
+    loop {
+        let Some(caps) = display_re.captures(html) else { break };
+        let latex = caps.get(1).unwrap().as_str().trim();
+        if latex.is_empty() {
+            return Err("empty display math block ($$$$)".into());
+        }
+        let rendered = render_to_string(&ctx, latex, &display_settings)
+            .map_err(|e| format!("katex error in display math: {e:?}"))?;
+        let replacement =
+            format!("<span class=\"katex-display\">{rendered}</span>");
+        let range = caps.get(0).unwrap().range();
+        html.replace_range(range, &replacement);
+        count += 1;
+    }
+
+    // Process inline math ($...$). Placeholder-protected \$ won't match.
+    loop {
+        let Some(caps) = inline_re.captures(html) else { break };
+        let latex = caps.get(1).unwrap().as_str().trim();
+        if latex.is_empty() {
+            return Err("empty inline math block ($$)".into());
+        }
+        let rendered = render_to_string(&ctx, latex, &inline_settings)
+            .map_err(|e| format!("katex error in inline math: {e:?}"))?;
+        let replacement =
+            format!("<span class=\"katex-inline\">{rendered}</span>");
+        let range = caps.get(0).unwrap().range();
+        html.replace_range(range, &replacement);
+        count += 1;
+    }
+
+    // Restore escaped dollar signs
+    *html = html.replace(ESCAPED_PLACEHOLDER, "\\$");
+
+    // Inject lightweight KaTeX CSS into <head> so display-mode math is
+    // centered and inline math renders inline-block.
+    let katex_css = r#"
+/* KaTeX math display helpers */
+.katex-display { display: block; text-align: center; margin: 1em 0; }
+.katex-display > .katex { display: inline-block; text-align: initial; }
+.katex-inline { display: inline; }
+"#;
+    if let Some(pos) = html.find("</head>") {
+        html.insert_str(pos, &format!("<style>{katex_css}</style>"));
+    } else if let Some(pos) = html.find("<body") {
+        html.insert_str(pos, &format!("<style>{katex_css}</style>\n"));
+    }
+
+    Ok(count)
+}
+
 /// Inject header and/or footer running elements into HTML content.
 ///
 /// Returns optional CSS to add to the asset bundle (for @page margin-box
@@ -457,6 +539,19 @@ fn main() {
             // injects @page margin-box rules so headers/footers appear on
             // every page without the user needing to write GCPM CSS by hand.
             let header_css = inject_header_footer(&mut input_content, header.as_deref(), footer.as_deref());
+
+            // Process LaTeX math expressions ($...$ and $$...$$) through
+            // katex-rs (pure Rust KaTeX reimplementation). Renders inline
+            // and display math to KaTeX HTML+MathML and injects minimal
+            // CSS for correct layout.
+            match process_math(&mut input_content) {
+                Ok(n) if n > 0 => eprintln!("Rendered {n} math expression(s)"),
+                Ok(_) => {} // No math found — silently ok
+                Err(e) => {
+                    eprintln!("Warning: math processing failed: {e}");
+                    eprintln!("The PDF will contain raw LaTeX delimiters.");
+                }
+            }
 
             // Build assets if fonts, CSS, images, or header/footer provided
             let has_header_css = header_css.is_some();

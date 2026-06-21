@@ -20,6 +20,8 @@ fulgur = { version = "0.18.0", path = "../fulgur" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 which = "8"
+katex-rs = "0.2"
+regex = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
