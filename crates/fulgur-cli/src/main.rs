@@ -231,6 +231,16 @@ enum Commands {
         /// Enable PDF/UA-1 conformance (implies --tagged and --bookmarks).
         #[arg(long = "pdf-ua")]
         pdf_ua: bool,
+
+        /// Header text displayed at the top-center of every page.
+        /// Uses CSS running elements under the hood.
+        #[arg(long)]
+        header: Option<String>,
+
+        /// Footer text displayed at the bottom-center of every page.
+        /// Uses CSS running elements under the hood.
+        #[arg(long)]
+        footer: Option<String>,
     },
     /// Inspect a PDF and extract text positions, images, and metadata as JSON
     Inspect {
@@ -319,6 +329,63 @@ fn parse_margin(s: &str) -> Margin {
     }
 }
 
+/// Inject header and/or footer running elements into HTML content.
+///
+/// Returns optional CSS to add to the asset bundle (for @page margin-box
+/// rules). The input HTML is mutated in-place: running-element `<div>`s are
+/// prepended/appended to `<body>`, and `@page` CSS is inserted into `<head>`.
+fn inject_header_footer(html: &mut String, header: Option<&str>, footer: Option<&str>) -> Option<String> {
+    if header.is_none() && footer.is_none() {
+        return None;
+    }
+
+    let mut page_css = String::new();
+    let mut body_prefix = String::new();
+    let mut body_suffix = String::new();
+
+    if let Some(h) = header {
+        let escaped = h.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+        body_prefix.push_str(&format!(
+            "<div style=\"position:running(fulgur-hdr)\">{}</div>\n",
+            escaped
+        ));
+        page_css.push_str(
+            "@top-center { content: element(fulgur-hdr); font-size: 9pt; color: #555; }\n",
+        );
+    }
+    if let Some(f) = footer {
+        let escaped = f.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+        body_suffix.push_str(&format!(
+            "<div style=\"position:running(fulgur-ftr)\">{}</div>\n",
+            escaped
+        ));
+        page_css.push_str(
+            "@bottom-center { content: element(fulgur-ftr); font-size: 8pt; color: #888; }\n",
+        );
+    }
+
+    let css_block = format!("@page {{ {} }}", page_css);
+
+    // Inject into <head> — insert before </head>
+    if let Some(pos) = html.find("</head>") {
+        html.insert_str(pos, &format!("<style>{}</style>", css_block));
+    } else if let Some(pos) = html.find("<body") {
+        // No <head> — inject <style> before <body>
+        html.insert_str(pos, &format!("<style>{}</style>\n", css_block));
+    }
+
+    // Inject running-element divs into <body>
+    if let Some(pos) = html.find("<body") {
+        let body_end = html[pos..].find('>').map(|p| pos + p + 1).unwrap_or(pos + 5);
+        html.insert_str(body_end, &format!("\n{}", body_prefix));
+    }
+    if let Some(pos) = html.rfind("</body>") {
+        html.insert_str(pos, &body_suffix);
+    }
+
+    Some(css_block)
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -345,6 +412,8 @@ fn main() {
             bookmarks,
             tagged,
             pdf_ua,
+            header,
+            footer,
         } => {
             if stdin && data.as_ref().is_some_and(|p| p.as_os_str() == "-") {
                 eprintln!("Error: cannot use --stdin and --data - together (both read stdin)");
@@ -368,7 +437,7 @@ fn main() {
                 })
             };
 
-            let input_content = if stdin {
+            let mut input_content = if stdin {
                 let mut buf = String::new();
                 std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
                     .expect("Failed to read stdin");
@@ -383,9 +452,19 @@ fn main() {
                 std::process::exit(1);
             };
 
-            // Build assets if fonts, CSS, or images provided
-            let assets = if !fonts.is_empty() || !css_files.is_empty() || !images.is_empty() {
+            // Inject header/footer running elements + @page CSS if requested.
+            // This wraps the body content with position:running() divs and
+            // injects @page margin-box rules so headers/footers appear on
+            // every page without the user needing to write GCPM CSS by hand.
+            let header_css = inject_header_footer(&mut input_content, header.as_deref(), footer.as_deref());
+
+            // Build assets if fonts, CSS, images, or header/footer provided
+            let has_header_css = header_css.is_some();
+            let assets = if !fonts.is_empty() || !css_files.is_empty() || !images.is_empty() || has_header_css {
                 let mut bundle = AssetBundle::new();
+                if let Some(ref css) = header_css {
+                    bundle.add_css(css.as_str());
+                }
                 for font_path in &fonts {
                     bundle.add_font_file(font_path).unwrap_or_else(|e| {
                         eprintln!("Warning: failed to load font {}: {e}", font_path.display());
