@@ -5998,4 +5998,158 @@ mod tests {
         );
         assert!(pdf.starts_with(b"%PDF"));
     }
+
+    // --- draw_under_opacity: block container with block-level children ---
+
+    #[test]
+    fn render_smoke_opacity_block_with_block_child_div() {
+        // Triggers draw_under_opacity. The outer div has opacity:0.5 and contains
+        // a block-level child div (not inline text), so block::convert processes
+        // the outer div with opacity_scope=true and populates opacity_descendants.
+        // draw_v2_page then calls draw_under_opacity for the outer div.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="opacity:0.5">
+              <div style="width:100px;height:50px;background:#c34;"></div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_opacity_block_with_block_child_para_and_div() {
+        // draw_under_opacity with multiple block children including a paragraph.
+        // Exercises the para_for_block arm inside draw_under_opacity's else branch.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="opacity:0.4">
+              <div style="width:80px;height:20px;background:#eef;"></div>
+              <p>Paragraph inside opacity block.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- paint_multicol_rule_for_page: column-rule CSS ---
+
+    #[test]
+    fn render_smoke_multicol_column_rule_solid() {
+        // Triggers paint_multicol_rule_for_page and build_multicol_stroke's Solid
+        // branch. column-rule requires build_multicol_stroke to return Some and
+        // paint_multicol_rule_for_page to actually draw lines between columns.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:2;column-gap:20px;column-rule:2px solid #444;width:400px">
+              <p>First column alpha beta gamma delta epsilon zeta eta theta.</p>
+              <p>Second column iota kappa lambda mu nu xi omicron pi rho sigma.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_multicol_column_rule_dashed() {
+        // build_multicol_stroke's Dashed branch — sets dash array on stroke.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:2;column-gap:16px;column-rule:3px dashed #999;width:360px">
+              <p>Dashed rule left column text alpha beta gamma.</p>
+              <p>Dashed rule right column text delta epsilon zeta.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_multicol_column_rule_dotted() {
+        // build_multicol_stroke's Dotted branch — sets Round line cap + dash array.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:2;column-gap:16px;column-rule:4px dotted #555;width:360px">
+              <p>Dotted rule left column text.</p>
+              <p>Dotted rule right column text.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- draw_under_transform: nested / clip / opacity descendants ---
+
+    #[test]
+    fn render_smoke_nested_transforms() {
+        // draw_under_transform's nested-transform branch (lines ~1436-1450):
+        // outer transform dispatches an inner transform via recursive
+        // draw_under_transform so both matrices compose.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="transform:rotate(5deg);width:100px;height:60px;background:#cef">
+              <div style="transform:scale(0.8);background:#efc;width:80px;height:40px">
+                nested transforms
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_overflow_clip_inside_transform() {
+        // draw_under_transform's overflow-clip descendant branch (lines ~1451-1477):
+        // an overflow:hidden block nested inside a transformed ancestor triggers
+        // draw_under_clip from within draw_under_transform's descendant loop.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="transform:rotate(3deg);width:120px;height:80px;background:#def">
+              <div style="overflow:hidden;width:90px;height:60px;background:#fed">
+                <p style="width:200px">Overflow clipped inside transform.</p>
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn render_smoke_opacity_block_inside_transform() {
+        // draw_under_transform's opacity-scoped descendant branch (lines ~1503-1528):
+        // a block with opacity < 1 and block children, nested inside a transformed
+        // ancestor, triggers draw_under_opacity from draw_under_transform's
+        // descendant loop.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="transform:rotate(5deg);width:140px;height:100px;background:#eef">
+              <div style="opacity:0.5">
+                <div style="width:80px;height:50px;background:#c34;"></div>
+              </div>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    // --- paint_multicol_paragraph_slices: long paragraph spanning columns ---
+
+    #[test]
+    fn render_smoke_multicol_paragraph_spanning_columns() {
+        // A single long paragraph inside a narrow multicol container forces
+        // the paragraph to span multiple columns, triggering
+        // convert_multicol_paragraph_slices → paragraph_slices map →
+        // paint_multicol_paragraph_slices in dispatch_fragment.
+        let pdf = render_html(
+            r#"<!doctype html><html><body>
+            <div style="column-count:3;column-gap:10px;width:300px;font-size:12px">
+              <p>Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda
+                 mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega.
+                 Lorem ipsum dolor sit amet consectetur adipiscing elit sed do
+                 eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+            </div>
+            </body></html>"#,
+        );
+        assert!(pdf.starts_with(b"%PDF"));
+    }
 }
