@@ -242,6 +242,13 @@ enum Commands {
         /// Uses CSS running elements under the hood.
         #[arg(long)]
         footer: Option<String>,
+
+        /// Directory containing KaTeX math fonts (WOFF2/TTF).
+        /// Auto-loads all font files in this directory so math
+        /// expressions ($...$ / $$...$$) render with proper typography.
+        /// Without this flag, math still renders but uses system fonts.
+        #[arg(long)]
+        math: Option<PathBuf>,
     },
     /// Inspect a PDF and extract text positions, images, and metadata as JSON
     Inspect {
@@ -520,10 +527,45 @@ fn main() {
             pdf_ua,
             header,
             footer,
+            math,
         } => {
             if stdin && data.as_ref().is_some_and(|p| p.as_os_str() == "-") {
                 eprintln!("Error: cannot use --stdin and --data - together (both read stdin)");
                 std::process::exit(1);
+            }
+
+            // Scan --math directory for KaTeX WOFF2/TTF font files.
+            // These are appended to the --font list so they're loaded
+            // into the AssetBundle and used for math typography.
+            let mut math_fonts: Vec<PathBuf> = Vec::new();
+            if let Some(ref math_dir) = math {
+                if math_dir.is_dir() {
+                    if let Ok(entries) = std::fs::read_dir(math_dir) {
+                        for entry in entries.filter_map(|e| e.ok()) {
+                            let path = entry.path();
+                            let ext = path
+                                .extension()
+                                .and_then(|s| s.to_str())
+                                .map(|s| s.to_ascii_lowercase());
+                            if let Some("ttf" | "otf" | "woff" | "woff2") = ext.as_deref() {
+                                math_fonts.push(path);
+                            }
+                        }
+                        math_fonts.sort();
+                        if !math_fonts.is_empty() {
+                            eprintln!(
+                                "Math: loaded {} font(s) from {}",
+                                math_fonts.len(),
+                                math_dir.display()
+                            );
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "Warning: --math path is not a directory: {}",
+                        math_dir.display()
+                    );
+                }
             }
 
             // Compute base_path before consuming input
@@ -579,7 +621,13 @@ fn main() {
 
             // Build assets if fonts, CSS, images, or header/footer provided
             let has_header_css = header_css.is_some();
-            let assets = if !fonts.is_empty() || !css_files.is_empty() || !images.is_empty() || has_header_css {
+            let has_math_fonts = !math_fonts.is_empty();
+            let assets = if !fonts.is_empty()
+                || !css_files.is_empty()
+                || !images.is_empty()
+                || has_header_css
+                || has_math_fonts
+            {
                 let mut bundle = AssetBundle::new();
                 if let Some(ref css) = header_css {
                     bundle.add_css(css.as_str());
@@ -587,6 +635,12 @@ fn main() {
                 for font_path in &fonts {
                     bundle.add_font_file(font_path).unwrap_or_else(|e| {
                         eprintln!("Warning: failed to load font {}: {e}", font_path.display());
+                    });
+                }
+                // Load fonts from --math directory
+                for font_path in &math_fonts {
+                    bundle.add_font_file(font_path).unwrap_or_else(|e| {
+                        eprintln!("Warning: failed to load math font {}: {e}", font_path.display());
                     });
                 }
                 for css_path in &css_files {
