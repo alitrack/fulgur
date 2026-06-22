@@ -394,13 +394,37 @@ fn process_math(html: &mut String) -> Result<usize, String> {
     // Restore escaped dollar signs
     *html = html.replace(ESCAPED_PLACEHOLDER, "\\$");
 
-    // Inject lightweight KaTeX CSS into <head> so display-mode math is
-    // centered and inline math renders inline-block.
+    // Inject minimal KaTeX CSS so the rendered math uses the correct
+    // font families. When KaTeX fonts are loaded via --font / AssetBundle,
+    // Blitz resolves font-family names from the loaded font metadata.
+    // The katex-rs output uses CSS classes (not inline font-family), so
+    // this stylesheet is required for proper font selection.
     let katex_css = r#"
-/* KaTeX math display helpers */
-.katex-display { display: block; text-align: center; margin: 1em 0; }
-.katex-display > .katex { display: inline-block; text-align: initial; }
-.katex-inline { display: inline; }
+/* KaTeX layout helpers */
+.katex-display{display:block;text-align:center;margin:1em 0}
+.katex-display>.katex{display:inline-block;text-align:initial}
+.katex-inline{display:inline}
+/* KaTeX font families — must match font names loaded via --font */
+.katex{font:normal 1.21em KaTeX_Main,Times New Roman,serif;line-height:1.2;text-indent:0}
+.katex .mathrm,.katex .textrm,.katex .text,.katex .textnormal,.katex .textrm,.katex .textmd{font-family:KaTeX_Main}
+.katex .mathit,.katex .textit{font-family:KaTeX_Math;font-style:italic}
+.katex .mathbf,.katex .textbf,.katex .textbold{font-family:KaTeX_Main;font-weight:bold}
+.katex .amsrm,.katex .mathbb,.katex .textbb{font-family:KaTeX_AMS}
+.katex .mathcal,.katex .textcal{font-family:KaTeX_Caligraphic}
+.katex .mathfrak,.katex .textfrak{font-family:KaTeX_Fraktur}
+.katex .mathtt,.katex .texttt{font-family:KaTeX_Typewriter}
+.katex .mathscr,.katex .textscr{font-family:KaTeX_Script}
+.katex .mathsf,.katex .textsf{font-family:KaTeX_SansSerif}
+.katex .mathnormal{font-family:KaTeX_Math;font-style:italic}
+.katex .mainrm{font-family:KaTeX_Main;font-style:normal}
+.katex .delimsizing.size1{font-family:KaTeX_Size1}
+.katex .delimsizing.size2{font-family:KaTeX_Size2}
+.katex .delimsizing.size3{font-family:KaTeX_Size3}
+.katex .delimsizing.size4{font-family:KaTeX_Size4}
+.katex .delimcenter,.katex .nulldelimiter{font-family:KaTeX_Size1}
+.katex .op-symbol{font-family:KaTeX_Size1}
+.katex .op-symbol.large-op{font-family:KaTeX_Size2}
+.katex .accent-body{font-family:KaTeX_Main}
 "#;
     if let Some(pos) = html.find("</head>") {
         html.insert_str(pos, &format!("<style>{katex_css}</style>"));
