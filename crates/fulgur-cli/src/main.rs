@@ -243,12 +243,15 @@ enum Commands {
         #[arg(long)]
         footer: Option<String>,
 
-        /// Directory containing KaTeX math fonts (WOFF2/TTF).
-        /// Auto-loads all font files in this directory so math
-        /// expressions ($...$ / $$...$$) render with proper typography.
-        /// Without this flag, math still renders but uses system fonts.
+        /// Auto-detect and load KaTeX math fonts from npm global or
+        /// system paths. For explicit directory, use --math-dir instead.
         #[arg(long)]
-        math: Option<PathBuf>,
+        math: bool,
+
+        /// Directory containing KaTeX math fonts (WOFF2/TTF/OTF/WOFF).
+        /// Overrides --math auto-detection with an explicit path.
+        #[arg(long = "math-dir")]
+        math_dir: Option<PathBuf>,
     },
     /// Inspect a PDF and extract text positions, images, and metadata as JSON
     Inspect {
@@ -442,6 +445,86 @@ fn process_math(html: &mut String) -> Result<usize, String> {
     Ok(count)
 }
 
+/// Scan a directory for font files (.ttf/.otf/.woff/.woff2).
+fn scan_font_dir(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut fonts = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_ascii_lowercase());
+            if let Some("ttf" | "otf" | "woff2") = ext.as_deref() {
+                fonts.push(path);
+            }
+        }
+        fonts.sort();
+    }
+    fonts
+}
+
+/// Auto-detect KaTeX font directory from common locations:
+/// 1. npm global install (katex/dist/fonts)
+/// 2. npm global nested deps (*/katex/dist/fonts, including scoped)
+/// 3. System paths (/usr/share/katex/fonts, etc.)
+fn auto_detect_katex_fonts() -> Option<std::path::PathBuf> {
+    // npm global prefix
+    if let Ok(prefix) = std::process::Command::new("npm")
+        .args(["config", "get", "prefix"])
+        .output()
+    {
+        let root = String::from_utf8_lossy(&prefix.stdout).trim().to_string();
+        // Direct install: <prefix>/lib/node_modules/katex/dist/fonts
+        let direct = std::path::PathBuf::from(&root)
+            .join("lib/node_modules/katex/dist/fonts");
+        if direct.is_dir() {
+            return Some(direct);
+        }
+        // Search nested (up to 3 levels for @scope/pkg/node_modules/katex)
+        let base = std::path::PathBuf::from(&root).join("lib/node_modules");
+        if let Some(found) = find_katex_fonts_in(&base, 0, 3) {
+            return Some(found);
+        }
+    }
+    // System paths
+    for sys_path in &["/usr/share/katex/fonts", "/usr/local/share/katex/fonts"] {
+        let p = std::path::PathBuf::from(sys_path);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Recursively search for katex/dist/fonts under a directory tree.
+fn find_katex_fonts_in(dir: &std::path::Path, depth: usize, max_depth: usize) -> Option<std::path::PathBuf> {
+    if depth > max_depth || !dir.is_dir() {
+        return None;
+    }
+    // Check direct child: <dir>/katex/dist/fonts
+    let candidate = dir.join("katex/dist/fonts");
+    if candidate.is_dir() {
+        return Some(candidate);
+    }
+    // Check nested: <dir>/*/node_modules/katex/dist/fonts
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let nested = entry.path().join("node_modules/katex/dist/fonts");
+            if nested.is_dir() {
+                return Some(nested);
+            }
+            // Recurse into scoped directories (@scope/pkg/...)
+            if entry.path().is_dir() {
+                if let Some(found) = find_katex_fonts_in(&entry.path(), depth + 1, max_depth) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Inject header and/or footer running elements into HTML content.
 ///
 /// Returns optional CSS to add to the asset bundle (for @page margin-box
@@ -528,43 +611,32 @@ fn main() {
             header,
             footer,
             math,
+            math_dir,
         } => {
             if stdin && data.as_ref().is_some_and(|p| p.as_os_str() == "-") {
                 eprintln!("Error: cannot use --stdin and --data - together (both read stdin)");
                 std::process::exit(1);
             }
 
-            // Scan --math directory for KaTeX WOFF2/TTF font files.
-            // These are appended to the --font list so they're loaded
-            // into the AssetBundle and used for math typography.
+            // Scan --math / --math-dir for KaTeX font files.
             let mut math_fonts: Vec<PathBuf> = Vec::new();
-            if let Some(ref math_dir) = math {
-                if math_dir.is_dir() {
-                    if let Ok(entries) = std::fs::read_dir(math_dir) {
-                        for entry in entries.filter_map(|e| e.ok()) {
-                            let path = entry.path();
-                            let ext = path
-                                .extension()
-                                .and_then(|s| s.to_str())
-                                .map(|s| s.to_ascii_lowercase());
-                            if let Some("ttf" | "otf" | "woff" | "woff2") = ext.as_deref() {
-                                math_fonts.push(path);
-                            }
-                        }
-                        math_fonts.sort();
-                        if !math_fonts.is_empty() {
-                            eprintln!(
-                                "Math: loaded {} font(s) from {}",
-                                math_fonts.len(),
-                                math_dir.display()
-                            );
-                        }
-                    }
-                } else {
+            let math_target: Option<PathBuf> = if math_dir.is_some() {
+                math_dir
+            } else if math {
+                auto_detect_katex_fonts()
+            } else {
+                None
+            };
+            if let Some(ref dir) = math_target {
+                math_fonts = scan_font_dir(dir);
+                if !math_fonts.is_empty() {
                     eprintln!(
-                        "Warning: --math path is not a directory: {}",
-                        math_dir.display()
+                        "Math: loaded {} font(s) from {}",
+                        math_fonts.len(),
+                        dir.display()
                     );
+                } else {
+                    eprintln!("Math: no font files found in {}", dir.display());
                 }
             }
 
