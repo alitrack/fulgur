@@ -364,14 +364,15 @@ fn process_math(html: &mut String) -> Result<usize, String> {
 
     let ctx = KatexContext::default();
     let inline_settings = Settings::default();
-    let mut display_settings = Settings::default();
-    display_settings.display_mode = true;
+    let display_settings = Settings {
+        display_mode: true,
+        ..Default::default()
+    };
 
     let mut count = 0usize;
 
     // Process display math first ($$...$$) to avoid conflict with inline $.
-    loop {
-        let Some(caps) = display_re.captures(html) else { break };
+    while let Some(caps) = display_re.captures(html) {
         let latex = caps.get(1).unwrap().as_str().trim();
         if latex.is_empty() {
             return Err("empty display math block ($$$$)".into());
@@ -386,8 +387,7 @@ fn process_math(html: &mut String) -> Result<usize, String> {
     }
 
     // Process inline math ($...$). Placeholder-protected \$ won't match.
-    loop {
-        let Some(caps) = inline_re.captures(html) else { break };
+    while let Some(caps) = inline_re.captures(html) {
         let latex = caps.get(1).unwrap().as_str().trim();
         if latex.is_empty() {
             return Err("empty inline math block ($$)".into());
