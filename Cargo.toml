@@ -8,3 +8,6 @@ rust-version = "1.85.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/fulgur-rs/fulgur"
 homepage = "https://github.com/fulgur-rs/fulgur"
+
+[patch.crates-io]
+blitz-dom = { path = "vendor/blitz-dom" }
